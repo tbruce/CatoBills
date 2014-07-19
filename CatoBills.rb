@@ -33,7 +33,9 @@ class CatoBillFactory
   end
 
   def take_status_census
-    @bills.each do |bill|
+    census = Hash.new()
+    @bills.each do |billparms|
+      bill = CatoBill.new(billparms)
 
     end
   end
@@ -54,30 +56,46 @@ class CatoBillFactory
 end
 
 class CatoBill
+  attr_reader :status
   def initialize (in_bill)
     @bill = in_bill
+    @btype = nil
     @status = nil
-    @xml = fetch_bill(@bill)
+    @xml = fetch_bill
     extract_meta
   end
 
   # pull bill via Cato API
   def fetch_bill
-    params = "billnumber=#{bill['billnumber']}&billversion=#{bill['billversion']}&congress=#{bill['congress']}&billtype=#{bill['billtype']}"
+    params = "billnumber=#{@bill['billnumber']}&billversion=#{@bill['billversion']}&congress=#{@bill['congress']}&billtype=#{@bill['billtype']}"
     begin
       bill_uri = URI(BILL_API_PREFIX + params)
-      xml = Net::HTTP.get(bill_uri)
-      unless xml
+      billjson = Net::HTTP.get(bill_uri)
+      unless billjson
         raise "Cato bill fetch failed for bill number #{bill['billnumber']}"
       end
     rescue Exception => e
       $stderr.puts e.message
       $stderr.puts e.backtrace.inspect
     end
-    return xml
+    billhash = JSON.parse(billjson)
+    return billhash['billbody']
   end
   def extract_meta
-    # bill status
+    @doc = Nokogiri::XML(@xml)
+    if @bill['billtype'] =~ /res$/
+      @btype = 'resolution'
+      stageattr = 'resolution-stage'
+    end
+    if @bill['billtype'] =~ /^(hr|s)$/
+      @btype = 'bill'
+      stageattr = 'bill-type'
+    end
+
+
+    @status = @doc.at_xpath("//#{@btype}[@='#{stageattr}']")["content"]
+
+    puts "woof"
 
   end
   def triplify
@@ -87,3 +105,4 @@ class CatoBill
 end
 
 f = CatoBillFactory.new
+f.take_status_census
