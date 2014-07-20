@@ -25,9 +25,10 @@ class CatoBillFactory
   # get the Cato bill list and rubify
   def fetch_bill_list
     begin
+      bill_json = nil
       bill_list_uri = URI(BILL_LIST_URL)
       bill_list_json = Net::HTTP.get(bill_list_uri)
-      unless bill_list_json
+      if bill_list_json.nil?
         raise "Cato bill list unavailable from Cato server"
       end
     rescue Exception => e
@@ -92,9 +93,10 @@ class CatoBill
   def fetch_bill
     params = "billnumber=#{@catonum}&billversion=#{@version}&congress=#{@congress}&billtype=#{@type}"
     begin
+      bill_json = nil
       bill_uri = URI(BILL_API_PREFIX + params)
       bill_json = Net::HTTP.get(bill_uri)
-      unless bill_json
+      if bill_json.nil?
         raise "Cato bill fetch failed for bill number #{@catonum}"
       end
     rescue Exception => e
@@ -116,7 +118,7 @@ class CatoBill
       @genre = 'bill'
       stageattr = 'bill-type'
     end
-    @stage = @doc.xpath("//#{@genre}").attr(stageattr).content
+    @stage = @doc.xpath("//#{@genre}").attr(stageattr).content unless @doc.xpath("//#{@genre}").attr(stageattr).nil?
     @title = @doc.xpath('//official-title').first.content
     @legisnum = @doc.xpath('//legis-num').first.content
     bflat = @legisnum.gsub(/\.*\s+/, '_').downcase
