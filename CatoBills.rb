@@ -192,25 +192,52 @@ class CatoBill
     return 1
   end
 
-  # extract all references from the bill
+  # extract references from the bill
   # Cato documentation is at http://namespaces.cato.org/catoxml
+  # Our aim is to resolve everything into a series of US Code section and subsection references.
+  # Any application would then rely on knowledge of USC structure to get more specific targets.
+  # So, we need to
+  # -- expand subsection ranges and etseqs into lists.
+  # -- expand section ranges and etseqs into lists.
+  # -- deal with StatL ranges. These should not necessarily be enumerated.
+  # -- deal with popular name references. These are handled in two ways.
+  #    -- if a portion of the reference (act and section)
+  #
   def extract_refs
-    # extract uscode references (entity-ref entity-type attribute is 'uscode')
-    # these consist of:
-    # simple section references
-    # references to subsections
-    # references to ranges of sections or subsections
-    # references to notes and et-seqs
-    # simple chapter and subchapter references
-    # ranges of chapters and subchapters
-    # references to appendices, sometimes with a section
 
 
-    # extract act references (entity-ref entity-type attribute is 'act')
-    # extract PubL references (entity-ref entity-type attribute is 'public-law')
-    # extract StatL references (entity-ref entity-type attribute is 'statute-at-large')
+
+
+
+
 
   end
+  # extract uscode references (entity-ref entity-type attribute is 'uscode')
+  # these consist of:
+  # simple section references
+  # references to subsections
+  # references to ranges of sections or subsections
+  # references to notes and et-seqs
+  # simple chapter and subchapter references
+  # ranges of chapters and subchapters
+  # references to appendices, sometimes with a section
+  def extract_uscode_refs
+
+  end
+  # extract act references (entity-ref entity-type attribute is 'act')
+  def extract_act_refs
+
+  end
+  # extract PubL references (entity-ref entity-type attribute is 'public-law')
+  def extract_publ_refs
+
+  end
+  # extract StatL references (entity-ref entity-type attribute is 'statute-at-large')
+  def extract_statl_refs
+
+  end
+
+
 
   def triplify
 
