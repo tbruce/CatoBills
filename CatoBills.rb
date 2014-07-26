@@ -14,9 +14,14 @@ BILL_RETRY_COUNT = 5
 BILL_RETRY_INTERVAL = 3
 BILL_LIST_URL = 'http://deepbills.cato.org/api/1/bills'
 BILL_API_PREFIX = 'http://deepbills.cato.org/api/1/bill?'
+CONGRESS_GOV_PREFIX = 'https://beta.congress.gov/bill/'
 
 DC_NS = 'http://purl.org/dc/elements/1.1/'
-CATO_NS = 'http://namespaces.cato.org/catoxml'
+CATO_NS = 'http://namespaces.cato.org/catoxml/'
+LII_LEGIS_VOCAB = 'http://liicornell.org/legis/'
+LII_TOP_VOCAB = 'http://liicornell.org/top/'
+USC_URI_PREFIX = 'http://liicornell.org/id/uscode/'
+
 
 # note on URI design for bills
 # generally, looks like http://liicornell.org/id/congress/bills/[congressnum]/[billtype]/[number]
@@ -104,7 +109,7 @@ class CatoBillFactory
     end
   end
 
-  def triplify_refs (exclude_intros = false)
+  def triplify_refs (triplefile, exclude_intros = false)
     server_uri = URI(BILL_API_PREFIX)
     httpcon = Net::HTTP.new(server_uri.host, server_uri.port)
     httpcon.read_timeout = HTTP_READ_TIMEOUT
@@ -113,7 +118,7 @@ class CatoBillFactory
         next if exclude_intros && item['billversion'] =~ /^i/
         bill = CatoBill.new(item)
         bill.populate(httpcon)
-        bill.extract_refs
+        bill.extract_refs(triplefile)
       end
     end
 
@@ -142,7 +147,7 @@ class CatoBill
 
   def initialize (in_bill)
     @type = in_bill['billtype']
-    @catonum = in_bill['billnumber']
+    @billnum = in_bill['billnumber']
     @version = in_bill['billversion']
     @congress = in_bill['congress']
     @uri = nil
@@ -153,10 +158,6 @@ class CatoBill
     @dctitle = nil
     @legisnum = nil
     @xml = nil
-    @act_refs = Array.new #strings representing act reference URIs
-    @uscode_refs = Array.new #strings representing US Code reference URIs
-    @publ_refs = Array.new #strings representing public law refs
-    @statl_refs = Array.new #strings representing Statutes at Large refs
   end
 
   # get all the content of the bill, and its metadata
@@ -180,7 +181,7 @@ class CatoBill
 
   # pull bill via Cato API
   def fetch_bill (httpcon = nil)
-    params = "billnumber=#{@catonum}&billversion=#{@version}&congress=#{@congress}&billtype=#{@type}"
+    params = "billnumber=#{@billnum}&billversion=#{@version}&congress=#{@congress}&billtype=#{@type}"
     # Cato bill list fetches fine -- it's the API that times out sometimes. So we get all defensive...
     retries = BILL_RETRY_COUNT
     start = Time.now
@@ -196,11 +197,11 @@ class CatoBill
      retry if (retries -= 1) > 0
     end
     if resp.nil?
-      $stderr.puts "Cato bill fetch failed for bill number #{@catonum}"
+      $stderr.puts "Cato bill fetch failed for bill number #{@billnum}"
       return nil
     end
     finish = Time.now
-    puts "Fetched Cato bill number #{@catonum}, tries =  #{BILL_RETRY_COUNT - retries + 1}, tt = #{finish - start}"
+    puts "Fetched Cato bill number #{@billnum}, tries =  #{BILL_RETRY_COUNT - retries + 1}, tt = #{finish - start}"
     billhash = JSON.parse(resp.body)
     return billhash['billbody']
   end
@@ -223,19 +224,36 @@ class CatoBill
     @legisnum = doc.xpath('//legis-num').first.content
     bflat = @legisnum.gsub(/\.\s+/, '_').downcase
     bnumber = @legisnum.split(/\s+/).last
-    @pathish_uri = "#{BILL_URI_PREFIX}/#{@congress}/#{@type}/#{bnumber}"
-    @uri = "#{BILL_URI_PREFIX}/#{@congress}_#{bflat}"
+    @pathish_uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}/#{@type}/#{bnumber}")
+    @uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}_#{bflat}")
   end
 
   # extract all references from the bill
   # Cato documentation is at http://namespaces.cato.org/catoxml
-  def extract_refs
+  def extract_refs(triplefile)
     doc = Nokogiri::XML(@xml)
-    extract_uscode_refs (doc)
-    # extract act references (entity-ref entity-type attribute is 'act')
-    # extract PubL references (entity-ref entity-type attribute is 'public-law')
-    # extract StatL references (entity-ref entity-type attribute is 'statute-at-large')
-
+    legis = RDF::Vocabulary.new(LII_BILL_VOCAB)
+    liivoc = RDF::Vocabulary.new(LII_TOP_VOCAB)
+    RDF::Writer.for(:ntriples).new(triplefile) do |writer|
+      writer << RDF::Graph.new do |graph|
+        # put me in the graph
+        graph << [@uri, RDF.type, legis.LegislativeMeasure]
+        # put my equivalent path-ish URI in the graph
+        graph << [@pathish_uri, RDF.type, legis.LegislativeMeasure]
+        graph << [@pathish_uri, OWL.sameAs, @uri]
+        # put my congress.gov page in the graph
+        utype = 'senate-bill' if @legisnum =~/^s/
+        utype = 'house-bill' if @legisnum =~/^h/
+        cgurl = CONGRESS_GOV_PREFIX + "#{@congress.ordinal}-congress/#{utype}/#{@billnum}"
+        graph << [@uri, FOAF.page, RDF::URI(cgurl)]
+        # put my metadata in the graph.  lots can be done here to populate legis model, not sure we want to
+        # get US Code refs and put them in the graph
+        extract_uscode_refs (doc, liivoc, graph)
+        # extract act references (entity-ref entity-type attribute is 'act')
+        # extract PubL references (entity-ref entity-type attribute is 'public-law')
+        # extract StatL references (entity-ref entity-type attribute is 'statute-at-large')
+      end
+    end
   end
   # extract uscode references (entity-ref entity-type attribute is 'uscode')
       # these consist of:
@@ -246,19 +264,34 @@ class CatoBill
       # simple chapter and subchapter references
       # ranges of chapters and subchapters
       # references to appendices, sometimes with a section
-  def extract_uscode_refs(doc)
+  def extract_uscode_refs(doc, myuri,graph)
     # simple section references
     puts "arrived"
     doc.xpath("//cato:entity-ref[@entity-type='uscode']", 'cato' => CATO_NS).each do |ref|
       refparts = ref['value'].split(/\//)
       reftype = refparts.unshift
-      case
-        when reftype == 'usc'
-          if refparts.last =~ /\.\./  # it's a range
+      reftitle = refparts.unshift
+      case reftype
+        when 'usc'
+          if refparts.last =~ /\.\./  # it's a range; could be section or subsection
+            return # can't handle these yet
+          elsif refparts.last =~ /etseq/  # it's a range
+            return # can't handle these yet
+          elsif refparts.last =~ /note/  # it's a note
 
+          else # it's a simple section or subsection reference
+            refstring = refparts.join('_')
+            refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
           end
-        when reftype == 'usc-chapter'
-        when reftype == 'usc-appendix'
+        when 'usc-chapter'
+          if refparts.last =~ /etseq/  # it's a range of chapters (does this really happen?)
+            return # can't handle these yet
+          elsif refparts.last =~ /note/  # it's a note
+
+          else # it's a simple chapter or subchapter reference
+            refstring = refparts.join('_')
+          end
+        when 'usc-appendix'
       end
     end
 
@@ -276,9 +309,17 @@ class CatoBill
 
   end
 
-
-  def triplify
-
+  def ordinalize(myi)
+    if (11..13).include?(myi % 100)
+      "#{myi}th"
+    else
+      case myi % 10
+        when 1; "#{myi}st"
+        when 2; "#{myi}nd"
+        when 3; "#{myi}rd"
+        else    "#{myi}th"
+      end
+    end
   end
 
 end
@@ -294,10 +335,9 @@ class CatoRunner
   def run
     RubyProf.start if @opts.profile_me
     @f.take_status_census(@exclude_intros) if @opts.take_census
-    @f.triplify_refs(@exclude_intros) if @opts.triplify_refs
+    @f.triplify_refs(@opts.triplify_refs, @exclude_intros) if @opts.triplify_refs
 
     if @opts.dump_xml_bills
-      bleagh = @opts.dump_xml_bills
       Dir.mkdir(@opts.dump_xml_bills) unless Dir.exist?(@opts.dump_xml_bills)
       @f.dump_xml_bills(@opts.dump_xml_bills,@exclude_intros)
     end
