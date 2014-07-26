@@ -1,3 +1,4 @@
+require 'fileutils'
 require 'json'
 require 'chronic'
 require 'nokogiri'
@@ -13,6 +14,9 @@ BILL_RETRY_COUNT = 5
 BILL_RETRY_INTERVAL = 3
 BILL_LIST_URL = 'http://deepbills.cato.org/api/1/bills'
 BILL_API_PREFIX = 'http://deepbills.cato.org/api/1/bill?'
+
+DC_NS = 'http://purl.org/dc/elements/1.1/'
+CATO_NS = 'http://namespaces.cato.org/catoxml'
 
 # note on URI design for bills
 # generally, looks like http://liicornell.org/id/congress/bills/[congressnum]/[billtype]/[number]
@@ -60,6 +64,24 @@ class CatoBillFactory
 
   end
 
+  # dump most recent versions as XML
+  def dump_xml_bills(dumpdir, exclude_intros)
+    # check to see that we have the directory that we need
+    server_uri = URI(BILL_API_PREFIX)
+    httpcon = Net::HTTP.new(server_uri.host, server_uri.port)
+    httpcon.read_timeout = HTTP_READ_TIMEOUT
+    httpcon.start do |http|
+      @bills.each do |item|
+        next if exclude_intros && item['billversion'] =~ /^i/
+        bill = CatoBill.new(item)
+        bill.populate(httpcon)
+        myfile = File.new(dumpdir + '/' + bill.uri.split(/\//).pop + '.xml', 'w')
+        myfile << bill.xml
+      end
+    end
+  end
+
+
   def take_status_census(exclude_intros = false)
     census = Hash.new()
     billcount = 0
@@ -81,7 +103,19 @@ class CatoBillFactory
       puts "#{stage} : #{num}\n"
     end
   end
+
   def triplify_refs (exclude_intros = false)
+    server_uri = URI(BILL_API_PREFIX)
+    httpcon = Net::HTTP.new(server_uri.host, server_uri.port)
+    httpcon.read_timeout = HTTP_READ_TIMEOUT
+    httpcon.start do |http|
+      @bills.each do |item|
+        next if exclude_intros && item['billversion'] =~ /^i/
+        bill = CatoBill.new(item)
+        bill.populate(httpcon)
+        bill.extract_refs
+      end
+    end
 
   end
   def jsonify_for_usc
@@ -99,7 +133,7 @@ end
 
 class CatoBill
 
-  attr_reader :stage, :title, :legisnum, :type, :genre, :congress, :version, :uri, :pathish_uri
+  attr_reader :stage, :title, :dctitle, :legisnum, :type, :genre, :congress, :version, :uri, :pathish_uri,:xml, :act_refs, :uscode_refs, :publ_refs, :statl_refs
 
   # why both initialize and populate?  constructor failure is very hard to handle
   # intelligently in Ruby if it involves anything more than argument errors, so you don't want to make it dependent
@@ -116,6 +150,7 @@ class CatoBill
     @genre = nil
     @stage = nil
     @title = nil
+    @dctitle = nil
     @legisnum = nil
     @xml = nil
     @act_refs = Array.new #strings representing act reference URIs
@@ -172,7 +207,7 @@ class CatoBill
 
   # extract any interesting bill metadata
   def extract_meta
-    @doc = Nokogiri::XML(@xml)
+    doc = Nokogiri::XML(@xml)
     if @type =~ /res$/
       @genre = 'resolution'
       stageattr = 'resolution-stage'
@@ -181,62 +216,65 @@ class CatoBill
       @genre = 'bill'
       stageattr = 'bill-type'
     end
-    @stage = @doc.xpath("//#{@genre}").attr(stageattr).content unless ( @doc.xpath("//#{@genre}").nil? || @doc.xpath("//#{@genre}").attr(stageattr).nil? )
-    @title = @doc.xpath('//official-title').first.content
-    @legisnum = @doc.xpath('//legis-num').first.content
-    bflat = @legisnum.gsub(/\.*\s+/, '_').downcase
+    @stage = doc.xpath("//#{@genre}").attr(stageattr).content unless ( doc.xpath("//#{@genre}").nil? || doc.xpath("//#{@genre}").attr(stageattr).nil? )
+    @title = doc.xpath('//official-title').first.content.gsub(/[\s\t\n]+/,' ')
+    @dctitle = doc.xpath('//dc:title', 'dc' => DC_NS).first.content unless doc.xpath('//dc:title', 'dc' => DC_NS).first.nil?
+    @dctitle = title.dup if @dctitle.nil?
+    @legisnum = doc.xpath('//legis-num').first.content
+    bflat = @legisnum.gsub(/\.\s+/, '_').downcase
     bnumber = @legisnum.split(/\s+/).last
-
     @pathish_uri = "#{BILL_URI_PREFIX}/#{@congress}/#{@type}/#{bnumber}"
-    @uri = "#{BILL_URI_PREFIX}/#{@congress}_#{@bflat}"
-    return 1
+    @uri = "#{BILL_URI_PREFIX}/#{@congress}_#{bflat}"
   end
 
-  # extract references from the bill
+  # extract all references from the bill
   # Cato documentation is at http://namespaces.cato.org/catoxml
-  # Our aim is to resolve everything into a series of US Code section and subsection references.
-  # Any application would then rely on knowledge of USC structure to get more specific targets.
-  # So, we need to
-  # -- expand subsection ranges and etseqs into lists.
-  # -- expand section ranges and etseqs into lists.
-  # -- deal with StatL ranges. These should not necessarily be enumerated.
-  # -- deal with popular name references. These are handled in two ways.
-  #    -- if a portion of the reference (act and section)
-  #
   def extract_refs
-
-
-
-
-
-
+    doc = Nokogiri::XML(@xml)
+    extract_uscode_refs (doc)
+    # extract act references (entity-ref entity-type attribute is 'act')
+    # extract PubL references (entity-ref entity-type attribute is 'public-law')
+    # extract StatL references (entity-ref entity-type attribute is 'statute-at-large')
 
   end
   # extract uscode references (entity-ref entity-type attribute is 'uscode')
-  # these consist of:
-  # simple section references
-  # references to subsections
-  # references to ranges of sections or subsections
-  # references to notes and et-seqs
-  # simple chapter and subchapter references
-  # ranges of chapters and subchapters
-  # references to appendices, sometimes with a section
-  def extract_uscode_refs
+      # these consist of:
+      # simple section references
+      # references to subsections
+      # references to ranges of sections or subsections
+      # references to notes and et-seqs
+      # simple chapter and subchapter references
+      # ranges of chapters and subchapters
+      # references to appendices, sometimes with a section
+  def extract_uscode_refs(doc)
+    # simple section references
+    puts "arrived"
+    doc.xpath("//cato:entity-ref[@entity-type='uscode']", 'cato' => CATO_NS).each do |ref|
+      refparts = ref['value'].split(/\//)
+      reftype = refparts.unshift
+      case
+        when reftype == 'usc'
+          if refparts.last =~ /\.\./  # it's a range
+
+          end
+        when reftype == 'usc-chapter'
+        when reftype == 'usc-appendix'
+      end
+    end
 
   end
-  # extract act references (entity-ref entity-type attribute is 'act')
-  def extract_act_refs
 
-  end
-  # extract PubL references (entity-ref entity-type attribute is 'public-law')
   def extract_publ_refs
 
   end
-  # extract StatL references (entity-ref entity-type attribute is 'statute-at-large')
+
   def extract_statl_refs
 
   end
 
+  def extract_act_refs
+
+  end
 
 
   def triplify
@@ -247,7 +285,7 @@ end
 
 class CatoRunner
   def initialize(opt_hash)
-    @opts =opt_hash
+    @opts = opt_hash
     @f = CatoBillFactory.new()
     @exclude_intros = false
     @exclude_intros = true if @opts.exclude_intros
@@ -257,6 +295,13 @@ class CatoRunner
     RubyProf.start if @opts.profile_me
     @f.take_status_census(@exclude_intros) if @opts.take_census
     @f.triplify_refs(@exclude_intros) if @opts.triplify_refs
+
+    if @opts.dump_xml_bills
+      bleagh = @opts.dump_xml_bills
+      Dir.mkdir(@opts.dump_xml_bills) unless Dir.exist?(@opts.dump_xml_bills)
+      @f.dump_xml_bills(@opts.dump_xml_bills,@exclude_intros)
+    end
+
 
     if @opts.profile_me
       result = RubyProf.stop
@@ -278,16 +323,14 @@ Usage:
 where options are:
   EOBANNER
   opt :take_census, "Take a census of bill-stage information"
-  opt :triplify_refs, "Create n-triples representing references to primary law in each bill"
+  opt :dump_xml_bills, "Dump latest versions of XML bills as files" , :default => '/tmp/catobills', :type => :string
+  opt :triplify_refs, "Create n-triples representing references to primary law in each bill", :default => '/tmp/catorefs.nt'
   opt :profile_me, "Invoke the Ruby profiler on this code"
   opt :exclude_intros, "Exclude introduction-only bills"
-  #opt :dump_files,      dump the bill files
 end
 
-f = CatoBillFactory.new
-
-RubyProf.start
-f.take_status_census
+runner = CatoRunner.new(opts)
+runner.run
 
 
 puts "done"
