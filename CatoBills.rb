@@ -317,7 +317,7 @@ class CatoBill
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
               writer << [@uri, DC.references, refuri] unless refuri.nil?
               if refparts.length > 1 # subsection reference
-                parenturi = RDF::URI(USC_URI_PREFIX + '_USC_' + refparts[0])
+                parenturi = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refparts[0]}")
                 writer << [refuri, liivoc.belongsToTransitive, parenturi]
               end
             end
