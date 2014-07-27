@@ -33,18 +33,17 @@ BILL_URI_PREFIX = 'http://liicornell.org/id/us/congress/bills'
 class CatoBillFactory
   def initialize
     @bills = Array.new()
-    @cong_num = calc_Congress()
+    @cong_num = calc_congress()
     fetch_bill_list
   end
 
   # get the Cato bill list and rubify
   def fetch_bill_list
     begin
-      bill_json = nil
       bill_list_uri = URI(BILL_LIST_URL)
       bill_list_json = Net::HTTP.get(bill_list_uri)
       if bill_list_json.nil?
-        raise "Cato bill list unavailable from Cato server"
+        raise 'Cato bill list unavailable from Cato server'
       end
     rescue Exception => e
       $stderr.puts e.message
@@ -57,14 +56,14 @@ class CatoBillFactory
     # as it comes from Cato, it appears to be sorted by Cato bill number, and within the bill
     # number, by commit date. Not sure it's a good idea to rely on this, so we'll risk some duplicated effort by
     # sorting here
-    puts "Sorting and de-duping bill list..."
+    puts 'Sorting and de-duping bill list...'
     last_cato_num = -1
     raw_bill_list.sort_by{ |line| [line['billnumber'].to_i, Chronic.parse(line['commitdate']).strftime('%s').to_i]}.each do |item|
       @bills.pop if item['billnumber'] == last_cato_num
       @bills.push(item)
       last_cato_num = item['billnumber']
     end
-    puts "...sorted."
+    puts '...sorted.'
     puts "Most-recentized bill list has #{@bills.length} items"
 
   end
@@ -80,7 +79,7 @@ class CatoBillFactory
         next if exclude_intros && item['billversion'] =~ /^i/
         bill = CatoBill.new(item)
         bill.populate(httpcon)
-        myfile = File.new(dumpdir + '/' + bill.uri.split(/\//).pop + '.xml', 'w')
+        myfile = File.new(dumpdir + '/' + bill.uri.to_s.split(/\//).pop + '.xml', 'w')
         myfile << bill.xml
       end
     end
@@ -111,6 +110,7 @@ class CatoBillFactory
 
   def triplify_refs (triplefile, exclude_intros = false)
     server_uri = URI(BILL_API_PREFIX)
+    frdf = File.open(triplefile, 'w+')
     httpcon = Net::HTTP.new(server_uri.host, server_uri.port)
     httpcon.read_timeout = HTTP_READ_TIMEOUT
     httpcon.start do |http|
@@ -118,17 +118,15 @@ class CatoBillFactory
         next if exclude_intros && item['billversion'] =~ /^i/
         bill = CatoBill.new(item)
         bill.populate(httpcon)
-        bill.extract_refs(triplefile)
+        bill.extract_refs(frdf)
       end
     end
-
+    frdf.close
   end
-  def jsonify_for_usc
 
-  end
 
   # calculates the number of the current Congress
-  def calc_Congress
+  def calc_congress
     # is this an odd-numbered year? if not, pick last year instead
     my_year = DateTime.now.strftime('%Y').to_i
     my_year = my_year -1 unless my_year.odd?
@@ -138,7 +136,7 @@ end
 
 class CatoBill
 
-  attr_reader :stage, :title, :dctitle, :legisnum, :type, :genre, :congress, :version, :uri, :pathish_uri,:xml, :act_refs, :uscode_refs, :publ_refs, :statl_refs
+  attr_reader :stage, :title, :dctitle, :legisnum, :type, :genre, :congress, :version, :uri, :pathish_uri,:xml
 
   # why both initialize and populate?  constructor failure is very hard to handle
   # intelligently in Ruby if it involves anything more than argument errors, so you don't want to make it dependent
@@ -209,6 +207,7 @@ class CatoBill
   # extract any interesting bill metadata
   def extract_meta
     doc = Nokogiri::XML(@xml)
+    stageattr = nil
     if @type =~ /res$/
       @genre = 'resolution'
       stageattr = 'resolution-stage'
@@ -230,30 +229,39 @@ class CatoBill
 
   # extract all references from the bill
   # Cato documentation is at http://namespaces.cato.org/catoxml
-  def extract_refs(triplefile)
+  def extract_refs(frdf)
     doc = Nokogiri::XML(@xml)
-    legis = RDF::Vocabulary.new(LII_BILL_VOCAB)
-    liivoc = RDF::Vocabulary.new(LII_TOP_VOCAB)
-    RDF::Writer.for(:ntriples).new(triplefile) do |writer|
-      writer << RDF::Graph.new do |graph|
+    legis = RDF::Vocabulary.new(RDF::URI(LII_LEGIS_VOCAB))
+    liivoc = RDF::Vocabulary.new(RDF::URI(LII_TOP_VOCAB))
+    rdfout = RDF::Writer.for(:ntriples).buffer do |writer|
+
+
+      # put my congress.gov page in the graph
+      utype = 'senate-bill' if @legisnum =~/^S/
+      utype = 'house-bill' if @legisnum =~/^H/
+      cgurl = CONGRESS_GOV_PREFIX + "#{ordinalize(@congress)}-congress/#{utype}/#{@billnum}"
+
+      # put my metadata in the graph.  lots can be done here to populate legis model, not sure we want to
+      # get US Code refs and put them in the graph
+      extract_uscode_refs(doc, liivoc, writer)
+      # extract act references (entity-ref entity-type attribute is 'act')
+      # extract PubL references (entity-ref entity-type attribute is 'public-law')
+      # extract StatL references (entity-ref entity-type attribute is 'statute-at-large')
+      begin
         # put me in the graph
-        graph << [@uri, RDF.type, legis.LegislativeMeasure]
+        writer << [@uri, RDF.type, legis.LegislativeMeasure]
         # put my equivalent path-ish URI in the graph
-        graph << [@pathish_uri, RDF.type, legis.LegislativeMeasure]
-        graph << [@pathish_uri, OWL.sameAs, @uri]
-        # put my congress.gov page in the graph
-        utype = 'senate-bill' if @legisnum =~/^s/
-        utype = 'house-bill' if @legisnum =~/^h/
-        cgurl = CONGRESS_GOV_PREFIX + "#{@congress.ordinal}-congress/#{utype}/#{@billnum}"
-        graph << [@uri, FOAF.page, RDF::URI(cgurl)]
-        # put my metadata in the graph.  lots can be done here to populate legis model, not sure we want to
-        # get US Code refs and put them in the graph
-        extract_uscode_refs (doc, liivoc, graph)
-        # extract act references (entity-ref entity-type attribute is 'act')
-        # extract PubL references (entity-ref entity-type attribute is 'public-law')
-        # extract StatL references (entity-ref entity-type attribute is 'statute-at-large')
+        writer << [@pathish_uri, RDF.type, legis.LegislativeMeasure]
+        writer << [@pathish_uri, OWL.sameAs, @uri]
+        writer << [@uri, FOAF.page, RDF::URI(cgurl)]
+      rescue RDF::WriterError => e
+        puts e.message
+        puts e.backtrace.inspect
+        next
       end
+
     end
+    frdf << rdfout # dump buffer to file
   end
   # extract uscode references (entity-ref entity-type attribute is 'uscode')
       # these consist of:
@@ -264,35 +272,53 @@ class CatoBill
       # simple chapter and subchapter references
       # ranges of chapters and subchapters
       # references to appendices, sometimes with a section
-  def extract_uscode_refs(doc, myuri,graph)
+  def extract_uscode_refs(doc, liivoc, writer)
     # simple section references
-    puts "arrived"
+    puts "entered usc-extract"
     doc.xpath("//cato:entity-ref[@entity-type='uscode']", 'cato' => CATO_NS).each do |ref|
       refparts = ref['value'].split(/\//)
       reftype = refparts.unshift
       reftitle = refparts.unshift
+      refuri = nil
+      parenturi = nil
       case reftype
         when 'usc'
-          if refparts.last =~ /\.\./  # it's a range; could be section or subsection
+          if refparts.last =~ /\.\./ # it's a range; could be section or subsection
             return # can't handle these yet
-          elsif refparts.last =~ /etseq/  # it's a range
+          elsif refparts.last =~ /etseq/ # it's a range
             return # can't handle these yet
-          elsif refparts.last =~ /note/  # it's a note
+          elsif refparts.last =~ /note/ # it's a section note; there are no subsection notes
+            refstring = refparts.join('_')
+            refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
 
           else # it's a simple section or subsection reference
             refstring = refparts.join('_')
             refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
+
+            if refparts.length > 1 # simple section reference
+              parenturi = RDF::URI(USC_URI_PREFIX + '_USC_' + refparts[0])
+
+            end
           end
         when 'usc-chapter'
-          if refparts.last =~ /etseq/  # it's a range of chapters (does this really happen?)
+          if refparts.last =~ /etseq/ # it's a range of chapters (does this really happen?)
             return # can't handle these yet
-          elsif refparts.last =~ /note/  # it's a note
+          elsif refparts.last =~ /note/
 
           else # it's a simple chapter or subchapter reference
             refstring = refparts.join('_')
           end
         when 'usc-appendix'
       end
+      begin
+        writer << [@uri, DC.references, refuri] unless refuri.nil?
+        writer << [refuri, liivoc.belongsToTransitive, parenturi] unless parenturi.nil?
+      rescue RDF::WriterError => e
+        puts e.message
+        puts e.backtrace.inspect
+        next
+      end
+
     end
 
   end
@@ -327,19 +353,19 @@ end
 class CatoRunner
   def initialize(opt_hash)
     @opts = opt_hash
-    @f = CatoBillFactory.new()
+    @factory = CatoBillFactory.new()
     @exclude_intros = false
     @exclude_intros = true if @opts.exclude_intros
   end
 
   def run
     RubyProf.start if @opts.profile_me
-    @f.take_status_census(@exclude_intros) if @opts.take_census
-    @f.triplify_refs(@opts.triplify_refs, @exclude_intros) if @opts.triplify_refs
+    @factory.take_status_census(@exclude_intros) if @opts.take_census
+    @factory.triplify_refs(@opts.triplify_refs, @exclude_intros) if @opts.triplify_refs
 
     if @opts.dump_xml_bills
       Dir.mkdir(@opts.dump_xml_bills) unless Dir.exist?(@opts.dump_xml_bills)
-      @f.dump_xml_bills(@opts.dump_xml_bills,@exclude_intros)
+      @factory.dump_xml_bills(@opts.dump_xml_bills,@exclude_intros)
     end
 
 
@@ -362,15 +388,13 @@ Usage:
     CatoBills.rb [options]
 where options are:
   EOBANNER
-  opt :take_census, "Take a census of bill-stage information"
-  opt :dump_xml_bills, "Dump latest versions of XML bills as files" , :default => '/tmp/catobills', :type => :string
-  opt :triplify_refs, "Create n-triples representing references to primary law in each bill", :default => '/tmp/catorefs.nt'
-  opt :profile_me, "Invoke the Ruby profiler on this code"
-  opt :exclude_intros, "Exclude introduction-only bills"
+  opt :take_census, 'Take a census of bill-stage information'
+  opt :dump_xml_bills, 'Dump latest versions of XML bills as files' , :default => '/tmp/catobills', :type => :string
+  opt :triplify_refs, 'Create n-triples representing references to primary law in each bill', :type => :string, :default => nil
+  opt :profile_me, 'Invoke the Ruby profiler on this code'
+  opt :exclude_intros, 'Exclude introduction-only bills'
 end
 
 runner = CatoRunner.new(opts)
 runner.run
-
-
-puts "done"
+puts 'done.'
