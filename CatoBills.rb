@@ -1,12 +1,14 @@
 require 'fileutils'
 require 'json'
 require 'chronic'
+require 'curb'
 require 'nokogiri'
 require 'net/http'
 require 'trollop'
 require 'rdf'
 require 'ruby-prof'
 require 'open-uri'
+require 'cgi'
 include RDF
 
 HTTP_READ_TIMEOUT = 300
@@ -21,6 +23,9 @@ CATO_NS = 'http://namespaces.cato.org/catoxml/'
 LII_LEGIS_VOCAB = 'http://liicornell.org/legis/'
 LII_TOP_VOCAB = 'http://liicornell.org/top/'
 USC_URI_PREFIX = 'http://liicornell.org/id/uscode/'
+
+DBPEDIA_LOOKUP_PREFIX='http://lookup.dbpedia.org/api/search.asmx/KeywordSearch?QueryString='
+
 
 
 # note on URI design for bills
@@ -118,7 +123,8 @@ class CatoBillFactory
         next if exclude_intros && item['billversion'] =~ /^i/
         bill = CatoBill.new(item)
         bill.populate(httpcon)
-        bill.extract_refs(frdf)
+        bill.extract_refs
+        bill.express_triples(frdf)
       end
     end
     frdf.close
@@ -156,6 +162,7 @@ class CatoBill
     @dctitle = nil
     @legisnum = nil
     @xml = nil
+    @refstrings = Array.new()
   end
 
   # get all the content of the bill, and its metadata
@@ -229,113 +236,120 @@ class CatoBill
 
   # extract all references from the bill
   # Cato documentation is at http://namespaces.cato.org/catoxml
-  def extract_refs(frdf)
+  def extract_refs
     doc = Nokogiri::XML(@xml)
+    doc.remove_namespaces!
+    doc.xpath("//entity-ref[@entity-type='act']").each do |refelem|
+      @refstrings.push(refelem.attr('value'))
+    end
+    doc.xpath("//act-name").each do |refelem|
+      @refstrings.push(refelem.content)
+    end
+    doc.xpath("//entity-ref[@entity-type='uscode']").each do |refelem|
+      @refstrings.push(refelem.attr('value'))
+    end
+    doc.xpath("//external-xref[@legal-doc='usc']").each do |refelem|
+      @refstrings.push(refelem.attr('parsable-cite'))
+    end
+    doc.xpath("//external-xref[@legal-doc='usc-chapter']").each do |refelem|
+      @refstrings.push(refelem.attr('parsable-cite'))
+    end
+    doc.xpath("//external-xref[@legal-doc='usc-appendix']").each do |refelem|
+      @refstrings.push(refelem.attr('parsable-cite'))
+    end
+    doc.xpath("//entity-ref[@entity-type='public-law']").each do |refelem|
+      @refstrings.push(refelem.attr('value'))
+    end
+    doc.xpath("//external-xref[@legal-doc='public-law']").each do |refelem|
+      @refstrings.push(refelem.attr('parsable-cite'))
+    end
+    doc.xpath("//entity-ref[@entity-type='statute-at-large']").each do |refelem|
+      @refstrings.push(refelem.attr('value'))
+    end
+    doc.xpath("//external-xref[@legal-doc='statute-at-large']").each do |refelem|
+      @refstrings.push(refelem.attr('parsable-cite'))
+    end
+    # uniqify
+    @refstrings.uniq!
+    puts 'Refstrings compiled...'
+  end
+
+  def express_triples(frdf)
+
+    # set up vocabularies
     legis = RDF::Vocabulary.new(RDF::URI(LII_LEGIS_VOCAB))
     liivoc = RDF::Vocabulary.new(RDF::URI(LII_TOP_VOCAB))
+
+  begin
+    # write triples into string buffer
     rdfout = RDF::Writer.for(:ntriples).buffer do |writer|
-
-
+      # write all metadata triples
+      # put me in the graph
+      writer << [@uri, RDF.type, legis.LegislativeMeasure]
+      # put my equivalent path-ish URI in the graph
+      writer << [@pathish_uri, RDF.type, legis.LegislativeMeasure]
+      writer << [@pathish_uri, OWL.sameAs, @uri]
       # put my congress.gov page in the graph
       utype = 'senate-bill' if @legisnum =~/^S/
       utype = 'house-bill' if @legisnum =~/^H/
       cgurl = CONGRESS_GOV_PREFIX + "#{ordinalize(@congress)}-congress/#{utype}/#{@billnum}"
-
-      # put my metadata in the graph.  lots can be done here to populate legis model, not sure we want to
-      # get US Code refs and put them in the graph
-      extract_uscode_refs(doc, liivoc, writer)
-      # extract act references (entity-ref entity-type attribute is 'act')
-      # extract PubL references (entity-ref entity-type attribute is 'public-law')
-      # extract StatL references (entity-ref entity-type attribute is 'statute-at-large')
-      begin
-        # put me in the graph
-        writer << [@uri, RDF.type, legis.LegislativeMeasure]
-        # put my equivalent path-ish URI in the graph
-        writer << [@pathish_uri, RDF.type, legis.LegislativeMeasure]
-        writer << [@pathish_uri, OWL.sameAs, @uri]
-        writer << [@uri, FOAF.page, RDF::URI(cgurl)]
-      rescue RDF::WriterError => e
-        puts e.message
-        puts e.backtrace.inspect
-        next
+      writer << [@uri, FOAF.page, RDF::URI(cgurl)]
+      #now process all reference strings from the doc
+      @refstrings.each do |ref|
+        next if ref.nil?  # not sure how this can happen
+        refparts = ref.split(/\//)
+        reftype = refparts.shift if refparts.length > 1
+        reftitle = refparts.shift
+        refuri = nil
+        parenturi = nil
+        case reftype
+          when 'usc' # US Code section reference of some kind
+            if refparts.last =~ /\.\./ # it's a range; could be section or subsection
+              next # can't handle these yet
+            elsif refparts.last =~ /etseq/ # it's a range
+              next # can't handle these yet
+            elsif refparts.last =~ /note/ # it's a section note; there are no subsection notes
+              refstring = refparts.join('_')
+              refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
+              writer << [@uri, DC.references, refuri] unless refuri.nil?
+            else # it's a simple section or subsection reference
+              refstring = refparts.join('_')
+              refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
+              writer << [@uri, DC.references, refuri] unless refuri.nil?
+              if refparts.length > 1 # subsection reference
+                parenturi = RDF::URI(USC_URI_PREFIX + '_USC_' + refparts[0])
+                writer << [refuri, liivoc.belongsToTransitive, parenturi]
+              end
+            end
+          when 'usc-chapter'
+            if refparts.last =~ /etseq/ # it's a range of chapters (does this really happen?)
+              next # can't handle these yet
+            elsif refparts.last =~ /note/
+            else # it's a simple chapter or subchapter reference
+              next
+            end
+          when 'usc-appendix'
+          when 'public-law'
+          when 'statute-at-large'
+          else # it's an act
+            # pull a PL reference if possible
+            # if we get a PL reference, check to see if there's a section. If so, try Table 3 for an actual USC cite
+            # check for dbPedia article on the Act
+            dbpuri = getDBPediaRef(reftitle.split(/:/)[0])
+            unless dbpuri.nil?
+              writer << [@uri, DC.references, RDF::URI(dbpuri)]
+            end
+        end
       end
-
+    end
+    rescue RDF::WriterError => e
+      puts e.message
+      puts e.backtrace.inspect
     end
     frdf << rdfout # dump buffer to file
   end
-  # extract uscode references (entity-ref entity-type attribute is 'uscode')
-      # these consist of:
-      # simple section references
-      # references to subsections
-      # references to ranges of sections or subsections
-      # references to notes and et-seqs
-      # simple chapter and subchapter references
-      # ranges of chapters and subchapters
-      # references to appendices, sometimes with a section
-  def extract_uscode_refs(doc, liivoc, writer)
-    # simple section references
-    puts "entered usc-extract"
-    doc.xpath("//cato:entity-ref[@entity-type='uscode']", 'cato' => CATO_NS).each do |ref|
-      refparts = ref['value'].split(/\//)
-      reftype = refparts.unshift
-      reftitle = refparts.unshift
-      refuri = nil
-      parenturi = nil
-      case reftype
-        when 'usc'
-          if refparts.last =~ /\.\./ # it's a range; could be section or subsection
-            return # can't handle these yet
-          elsif refparts.last =~ /etseq/ # it's a range
-            return # can't handle these yet
-          elsif refparts.last =~ /note/ # it's a section note; there are no subsection notes
-            refstring = refparts.join('_')
-            refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
 
-          else # it's a simple section or subsection reference
-            refstring = refparts.join('_')
-            refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
-
-            if refparts.length > 1 # simple section reference
-              parenturi = RDF::URI(USC_URI_PREFIX + '_USC_' + refparts[0])
-
-            end
-          end
-        when 'usc-chapter'
-          if refparts.last =~ /etseq/ # it's a range of chapters (does this really happen?)
-            return # can't handle these yet
-          elsif refparts.last =~ /note/
-
-          else # it's a simple chapter or subchapter reference
-            refstring = refparts.join('_')
-          end
-        when 'usc-appendix'
-      end
-      begin
-        writer << [@uri, DC.references, refuri] unless refuri.nil?
-        writer << [refuri, liivoc.belongsToTransitive, parenturi] unless parenturi.nil?
-      rescue RDF::WriterError => e
-        puts e.message
-        puts e.backtrace.inspect
-        next
-      end
-
-    end
-
-  end
-
-  def extract_publ_refs
-
-  end
-
-  def extract_statl_refs
-
-  end
-
-  def extract_act_refs
-
-  end
-
-  def ordinalize(myi)
+   def ordinalize(myi)
     if (11..13).include?(myi % 100)
       "#{myi}th"
     else
@@ -346,6 +360,25 @@ class CatoBill
         else    "#{myi}th"
       end
     end
+   end
+
+  def getDBPediaRef(lookupstr)
+    looker = DBPEDIA_LOOKUP_PREFIX + "#{CGI::escape(lookupstr)}"
+    c = Curl.get(looker) do |c|
+      c.headers['Accept'] = 'application/json'
+    end
+    # unfortunately, the QueryClass parameter for dbPedia lookups is not much help, since class information
+    # is often missing.  Best alternative is to use a filter based on dbPedia categories.  Crudely implemented
+    # here as a string match against a series of keywords
+
+    JSON.parse(c.body_str)['results'].each do |entry|
+      use_me = false
+      entry['categories'].each do |cat|
+        use_me = true if cat['label'] =~ /\b(law|legislation|government|Act)\b/
+      end
+      return entry['uri'] if use_me
+    end
+    return nil
   end
 
 end
