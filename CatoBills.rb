@@ -353,7 +353,7 @@ class CatoBill
             uristr = PUBL_URI_PREFIX + "#{reftitle}_PL_#{refparts[0]}"
             writer << [@uri , liivoc.refPubL, RDF::URI(uristr)]
             pagestr = "http://www.gpo.gov/fdsys/pkg/PLAW-#{reftitle}publ#{refparts[0]}/pdf/PLAW-#{reftitle}publ#{refparts[0]}.pdf"
-            writer << []
+            writer << [RDF::URI(uristr), FOAF.page, RDF::URI(pagestr)]
           when 'statute-at-large'
             uristr = STATL_URI_PREFIX + "#{reftitle}_Stat_#{refparts[0]}"
             writer << [@uri , liivoc.refStatL, RDF::URI(uristr)]
