@@ -340,7 +340,7 @@ class CatoBill
             else # it's a simple chapter or subchapter reference
               refchapter = refparts.shift
               refsubchapter = refparts.shift unless refparts.length == 0
-              uristr = "#{reftitle}_USC_chapter_#{refchapter}"
+              uristr = USC_URI_PREFIX + "#{reftitle}_USC_chapter_#{refchapter}"
               uristr += "_subchapter_#{refsubchapter}" unless refsubchapter.nil?
               writer << [@uri, liivoc.refUSCode, RDF::URI(uristr)]
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
@@ -362,7 +362,7 @@ class CatoBill
             # pull a PL reference if possible
             # if we get a PL reference, check to see if there's a section. If so, try Table 3 for an actual USC cite
             # also record the entire Cato ref in case we find a use for it.
-            writer << [@uri, liilegis.hasCatoAct, ref ]
+            writer << [@uri, legis.hasCatoAct, ref ]
             # check for dbPedia article on the Act
             dbpuri = get_dbpedia_ref(reftitle.split(/:/)[0])
             unless dbpuri.nil?
