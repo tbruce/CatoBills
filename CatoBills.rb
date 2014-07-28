@@ -23,6 +23,10 @@ CATO_NS = 'http://namespaces.cato.org/catoxml/'
 LII_LEGIS_VOCAB = 'http://liicornell.org/legis/'
 LII_TOP_VOCAB = 'http://liicornell.org/top/'
 USC_URI_PREFIX = 'http://liicornell.org/id/uscode/'
+STATL_URI_PREFIX = 'http://liicornell.org/id/statl/'
+PUBL_URI_PREFIX = 'http://liicornell.org/id/publ/'
+USC_PAGE_PREFIX = 'http://www.law.cornell.edu/uscode/text/'
+# NB: PAY ATTENTION: there are hard-coded GPO URLS in the source code near line 350 (currently)
 
 DBPEDIA_LOOKUP_PREFIX='http://lookup.dbpedia.org/api/search.asmx/KeywordSearch?QueryString='
 
@@ -311,31 +315,56 @@ class CatoBill
             elsif refparts.last =~ /note/ # it's a section note; there are no subsection notes
               refstring = refparts.join('_')
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
-              writer << [@uri, DC.references, refuri] unless refuri.nil?
+              writer << [@uri, liivoc.refUSCode, refuri] unless refuri.nil?
+              pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
+              writer << [@uri, FOAF.page, RDF::URI(pagestr)]
             else # it's a simple section or subsection reference
               refstring = refparts.join('_')
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
-              writer << [@uri, DC.references, refuri] unless refuri.nil?
+              writer << [@uri, liivoc.refUSCode, refuri] unless refuri.nil?
               if refparts.length > 1 # subsection reference
                 parenturi = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refparts[0]}")
                 writer << [refuri, liivoc.belongsToTransitive, parenturi]
+                pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
+                writer << [parenturi, FOAF.page, RDF::URI(pagestr)]
+              else
+                pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
+                writer << [refuri, FOAF.page, RDF::URI(pagestr)]
               end
+
             end
           when 'usc-chapter'
             if refparts.last =~ /etseq/ # it's a range of chapters (does this really happen?)
               next # can't handle these yet
             elsif refparts.last =~ /note/
             else # it's a simple chapter or subchapter reference
-              next
+              refchapter = refparts.shift
+              refsubchapter = refparts.shift unless refparts.length == 0
+              uristr = "#{reftitle}_USC_chapter_#{refchapter}"
+              uristr += "_subchapter_#{refsubchapter}" unless refsubchapter.nil?
+              writer << [@uri, liivoc.refUSCode, RDF::URI(uristr)]
+              pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
+              pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
+              writer << [RDF::URI(uristr), FOAF.page, RDF::URI(pagestr)]
             end
           when 'usc-appendix'
+            next # not handling these right now
           when 'public-law'
+            uristr = PUBL_URI_PREFIX + "#{reftitle}_PL_#{refparts[0]}"
+            writer << [@uri , liivoc.refPubL, RDF::URI(uristr)]
+            pagestr = "http://www.gpo.gov/fdsys/pkg/PLAW-#{reftitle}publ#{refparts[0]}/pdf/PLAW-#{reftitle}publ#{refparts[0]}.pdf"
+            writer << []
           when 'statute-at-large'
+            uristr = STATL_URI_PREFIX + "#{reftitle}_Stat_#{refparts[0]}"
+            writer << [@uri , liivoc.refStatL, RDF::URI(uristr)]
+
           else # it's an act
             # pull a PL reference if possible
             # if we get a PL reference, check to see if there's a section. If so, try Table 3 for an actual USC cite
+            # also record the entire Cato ref in case we find a use for it.
+            writer << [@uri, liilegis.hasCatoAct, ref ]
             # check for dbPedia article on the Act
-            dbpuri = getDBPediaRef(reftitle.split(/:/)[0])
+            dbpuri = get_dbpedia_ref(reftitle.split(/:/)[0])
             unless dbpuri.nil?
               writer << [@uri, DC.references, RDF::URI(dbpuri)]
             end
@@ -362,7 +391,7 @@ class CatoBill
     end
    end
 
-  def getDBPediaRef(lookupstr)
+  def get_dbpedia_ref(lookupstr)
     looker = DBPEDIA_LOOKUP_PREFIX + "#{CGI::escape(lookupstr)}"
     c = Curl.get(looker) do |c|
       c.headers['Accept'] = 'application/json'
