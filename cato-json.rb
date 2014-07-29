@@ -118,30 +118,26 @@ class CatoBillsJsonFactory
     myuri = uristart + vol_or_title + urimid + pg_or_section
 
     # get the JSON
-    q = <<EOQ
-     PREFIX rdfs:<http://www.w3.org/2000/01/rdf-schema#>
-     PREFIX owl:<http://www.w3.org/2002/07/owl#>
-     PREFIX xsd:<http://www.w3.org/2001/XMLSchema#>
-     PREFIX rdf:<http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-     PREFIX xml:<http://www.w3.org/XML/1998/namespace>
-     PREFIX skos:<http://www.w3.org/2004/02/skos/core#>
-     PREFIX dct:<http://purl.org/dc/terms/>
-     PREFIX usc:<http://liicornell.org/id/uscode/>
-     PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+    PREFIX rdfs:<http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX psys:<http://proton.semanticweb.org/protonsys#>
+    PREFIX owl:<http://www.w3.org/2002/07/owl#>
+    PREFIX xsd:<http://www.w3.org/2001/XMLSchema#>
+    PREFIX rdf:<http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX pext:<http://proton.semanticweb.org/protonext#>
+    PREFIX foaf:<http://xmlns.com/foaf/0.1/>
+        PREFIX dct:<http://purl.org/dc/terms/>
+        PREFIX liitop:<http://liicornell.org/top/>
 
-
-     SELECT DISTINCT ?title ?page
-     WHERE {
-       ?bill dct:title ?title .
-       ?bill foaf:page ?page .
-       ?author foaf:name ?authname .
-       ?author scholar:institutionBio ?biolink .
-       OPTIONAL { ?author owl:sameAs ?dbpsame FILTER regex (str(?dbpsame),'dbpedia', 'i')}
-       ?work dct:contributor ?author
-       FILTER regex (str(?author),'scholars','i') .
-           {
-               SELECT ?work
-               WHERE { ?work scholar:
+        SELECT DISTINCT ?title ?page
+    WHERE {
+      ?bill foaf:page ?page .
+      ?bill dct:title ?title .
+      ?bill liitop:refUSCode ?childCode
+      {
+          SELECT ?childCode
+      WHERE {?childCode liitop:belongsToTransitive  <http://liicornell.org/id/uscode/22_USC_8727> .}
+    }
+    }
 EOQ
     q.rstrip! # looks like heredoc adds whitespace in ruby
     q = q + myprop
