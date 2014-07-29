@@ -10,10 +10,10 @@ include RDF
 require 'sparql'
 require 'linkeddata'
 
-class ScholarJsonFactory
+class CatoBillsJsonFactory
   def initialize
     @sparql = SPARQL::Client.new(CATO_ENDPOINT)
-    @cfrsparql = SPARQL::Client.new(CFR_ENDPOINT)
+    @uscsparql = SPARQL::Client.new(USC_ENDPOINT)
     @json_sparql = SPARQL::Client.new(CATO_ENDPOINT)
     #initialize the directory structure, including killing all the old stuff
     reset_dirs()
@@ -22,7 +22,7 @@ class ScholarJsonFactory
   end
 
   def run
-    ['CFR', 'USC', 'SCOTUS'].each do |type|
+    ['USC'].each do |type|
       run_uri_list(type)
     end
   end
@@ -32,11 +32,11 @@ class ScholarJsonFactory
     expansion_list = Array.new
     case type
       when 'CFR'
-        predicate = '<http://liicornell.org/liischolar/refCFR>'
+        predicate = '<http://liicornell.org/top/refCFR>'
       when 'USC'
-        predicate = '<http://liicornell.org/liischolar/refUSCode>'
+        predicate = '<http://liicornell.org/top/refUSCode>'
       when 'SCOTUS'
-        predicate = '<http://liicornell.org/liischolar/refSCOTUS>'
+        predicate = '<http://liicornell.org/top/refSCOTUS>'
     end
     # query
     result = @sparql.query("SELECT DISTINCT ?o WHERE {?s #{predicate} ?o .}")
@@ -49,14 +49,14 @@ class ScholarJsonFactory
       do_item(o, o, type)
 
       #if it's a CFR part or subpart reference, stick it in the list for expansion
-      expansion_list.push(o) if type == 'CFR' && o =~ /_(subpart|part)_/
+      expansion_list.push(o) if type == 'CFR' && o =~ /_chapter_/
     end
 
     #run actual URI list
     # now run the list of "expandable"  URIs
     expansion_list.each do |o|
       q = "SELECT DISTINCT ?s WHERE { ?s  <http://liicornell.org/liicfr/belongsToTransitive> <#{o}> . }"
-      result = @cfrsparql.query(q)
+      result = @uscsparql.query(q)
       result.each do |item|
         do_item(item[:s].to_s, o, type)
       end
@@ -92,14 +92,14 @@ class ScholarJsonFactory
     end
     parts = filename_uri.split('/')
     cite = parts.pop
-    if type == 'CFR' && cite =~ /_part_/
+    if type == 'USC' && cite =~ /_chapter_/
       vol_or_title, midbit, partplc, pg_or_section = cite.split('_')
-      cln_pg_or_section = 'part-' + pg_or_section
-      pg_or_section = 'part_' + pg_or_section
-    elsif type == 'CFR' && cite =~ /_subpart_/
+      cln_pg_or_section = 'chapter-' + pg_or_section
+      pg_or_section = 'chapter_' + pg_or_section
+    elsif type == 'USC' && cite =~ /_subchapter_/
       vol_or_title, midbit, partplc, pg_or_section = cite.split('_')
-      cln_pg_or_section = 'subpart-' + pg_or_section
-      pg_or_section = 'subpart_' + pg_or_section
+      cln_pg_or_section = 'subchapter-' + pg_or_section
+      pg_or_section = 'subchapter_' + pg_or_section
     else
       vol_or_title, midbit, pg_or_section = cite.split('_')
       cln_pg_or_section = pg_or_section.dup
@@ -109,7 +109,7 @@ class ScholarJsonFactory
     mydir = parentdir + '/' + pg_or_section
 
     # did we do this one already?
-    return if File.exists?(mydir + '/scholarship.json')
+    return if File.exists?(mydir + '/catobills.json')
 
     @cleanpath_file <<  "#{pathprefix}/text/#{vol_or_title}/#{cln_pg_or_section}\n"
 
@@ -126,16 +126,14 @@ class ScholarJsonFactory
      PREFIX xml:<http://www.w3.org/XML/1998/namespace>
      PREFIX skos:<http://www.w3.org/2004/02/skos/core#>
      PREFIX dct:<http://purl.org/dc/terms/>
-     PREFIX usc:<http://liicornell.org/liiuscode/>
+     PREFIX usc:<http://liicornell.org/id/uscode/>
      PREFIX foaf: <http://xmlns.com/foaf/0.1/>
-     PREFIX cfr:<http://liicornell.org/liicfr/>
-     PREFIX scotus:<http://liicornell.org/liiscotus/>
-     PREFIX scholar:<http://liicornell.org/liischolar/>
 
-     SELECT DISTINCT ?title ?authname ?link ?biolink ?dbpsame
+
+     SELECT DISTINCT ?title ?page
      WHERE {
-       ?work dct:title ?title .
-       ?work scholar:abstractPage ?link .
+       ?bill dct:title ?title .
+       ?bill foaf:page ?page .
        ?author foaf:name ?authname .
        ?author scholar:institutionBio ?biolink .
        OPTIONAL { ?author owl:sameAs ?dbpsame FILTER regex (str(?dbpsame),'dbpedia', 'i')}
@@ -160,8 +158,8 @@ EOQ
     end
 
     # write
-    $stderr.puts "Creating file #{mydir}/scholarship.json \n"
-    f = File.new(mydir + '/scholarship.json', 'w')
+    $stderr.puts "Creating file #{mydir}/catobills.json \n"
+    f = File.new(mydir + '/catobills.json', 'w')
     f << results.to_json
     f.close
   end
@@ -177,7 +175,7 @@ EOQ
     Dir.mkdir(JSON_ROOT_DIRECTORY + '/supremecourt') unless Dir.exist?(JSON_ROOT_DIRECTORY + '/supremecourt')
 
     Find.find(JSON_ROOT_DIRECTORY) do |path|
-      FileUtils.rm_f(path) if path =~ /scholarship\.json/
+      FileUtils.rm_f(path) if path =~ /catobills\.json/
     end
 
   end
@@ -185,5 +183,5 @@ EOQ
 end
 
 
-factory = ScholarJsonFactory.new()
+factory = CatoBillsJsonFactory.new()
 factory.run

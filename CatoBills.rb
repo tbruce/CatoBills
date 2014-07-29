@@ -290,6 +290,7 @@ class CatoBill
       # write all metadata triples
       # put me in the graph
       writer << [@uri, RDF.type, legis.LegislativeMeasure]
+      writer << [@uri, DC.title, @dctitle]
       # put my equivalent path-ish URI in the graph
       writer << [@pathish_uri, RDF.type, legis.LegislativeMeasure]
       writer << [@pathish_uri, OWL.sameAs, @uri]
@@ -317,14 +318,14 @@ class CatoBill
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
               writer << [@uri, liivoc.refUSCode, refuri] unless refuri.nil?
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
-              writer << [@uri, FOAF.page, RDF::URI(pagestr)]
+              writer << [refuri, FOAF.page, RDF::URI(pagestr)]
             else # it's a simple section or subsection reference
               refstring = refparts.join('_')
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
               writer << [@uri, liivoc.refUSCode, refuri] unless refuri.nil?
               if refparts.length > 1 # subsection reference
                 parenturi = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refparts[0]}")
-                writer << [refuri, liivoc.belongsToTransitive, parenturi]
+                writer << [parenturi, liivoc.containsTransitive, refuri]
                 pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
                 writer << [parenturi, FOAF.page, RDF::URI(pagestr)]
               else
