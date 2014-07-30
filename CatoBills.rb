@@ -159,7 +159,7 @@ class CatoBill
     @version = in_bill['billversion']
     @congress = in_bill['congress']
     @uri = nil
-    @pathish_uri = nil
+    #@pathish_uri = nil
     @genre = nil
     @stage = nil
     @title = nil
@@ -234,7 +234,7 @@ class CatoBill
     @legisnum = doc.xpath('//legis-num').first.content
     bflat = @legisnum.gsub(/\.\s+/, '_').downcase
     bnumber = @legisnum.split(/\s+/).last
-    @pathish_uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}/#{@type}/#{bnumber}")
+    #@pathish_uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}/#{@type}/#{bnumber}")
     @uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}_#{bflat}")
   end
 
@@ -292,8 +292,8 @@ class CatoBill
       writer << [@uri, RDF.type, legis.LegislativeMeasure]
       writer << [@uri, DC.title, @dctitle]
       # put my equivalent path-ish URI in the graph
-      writer << [@pathish_uri, RDF.type, legis.LegislativeMeasure]
-      writer << [@pathish_uri, OWL.sameAs, @uri]
+      #writer << [@pathish_uri, RDF.type, legis.LegislativeMeasure]
+      #writer << [@pathish_uri, OWL.sameAs, @uri]
       # put my congress.gov page in the graph
       utype = 'senate-bill' if @legisnum =~/^S/
       utype = 'house-bill' if @legisnum =~/^H/

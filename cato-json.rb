@@ -49,7 +49,9 @@ class CatoBillsJsonFactory
       do_item(o, o, type)
 
       #if it's a CFR part or subpart reference, stick it in the list for expansion
-      expansion_list.push(o) if type == 'CFR' && o =~ /_chapter_/
+      expansion_list.push(o) if type == 'USC' && o =~ /_chapter_/  #should get chapters and subchapters
+      expansion_list.push(o) if type == 'USC' && o =~ /\.\./  # ranges
+      expansion_list.push(o) if type == 'USC' && o =~ /etseq/  # ranges
     end
 
     #run actual URI list
@@ -118,26 +120,30 @@ class CatoBillsJsonFactory
     myuri = uristart + vol_or_title + urimid + pg_or_section
 
     # get the JSON
-    PREFIX rdfs:<http://www.w3.org/2000/01/rdf-schema#>
-    PREFIX psys:<http://proton.semanticweb.org/protonsys#>
-    PREFIX owl:<http://www.w3.org/2002/07/owl#>
-    PREFIX xsd:<http://www.w3.org/2001/XMLSchema#>
-    PREFIX rdf:<http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-    PREFIX pext:<http://proton.semanticweb.org/protonext#>
-    PREFIX foaf:<http://xmlns.com/foaf/0.1/>
-        PREFIX dct:<http://purl.org/dc/terms/>
-        PREFIX liitop:<http://liicornell.org/top/>
+    q = <<EOQ
+     PREFIX rdfs:<http://www.w3.org/2000/01/rdf-schema#>
+     PREFIX owl:<http://www.w3.org/2002/07/owl#>
+     PREFIX xsd:<http://www.w3.org/2001/XMLSchema#>
+     PREFIX rdf:<http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+     PREFIX xml:<http://www.w3.org/XML/1998/namespace>
+     PREFIX skos:<http://www.w3.org/2004/02/skos/core#>
+     PREFIX dct:<http://purl.org/dc/terms/>
+     PREFIX usc:<http://liicornell.org/id/uscode/>
+     PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 
-        SELECT DISTINCT ?title ?page
-    WHERE {
-      ?bill foaf:page ?page .
-      ?bill dct:title ?title .
-      ?bill liitop:refUSCode ?childCode
-      {
-          SELECT ?childCode
-      WHERE {?childCode liitop:belongsToTransitive  <http://liicornell.org/id/uscode/22_USC_8727> .}
-    }
-    }
+
+     SELECT DISTINCT ?title ?page
+     WHERE {
+       ?bill dct:title ?title .
+       ?bill foaf:page ?page .
+       ?author foaf:name ?authname .
+       ?author scholar:institutionBio ?biolink .
+       OPTIONAL { ?author owl:sameAs ?dbpsame FILTER regex (str(?dbpsame),'dbpedia', 'i')}
+       ?work dct:contributor ?author
+       FILTER regex (str(?author),'scholars','i') .
+           {
+               SELECT ?work
+               WHERE { ?work scholar:
 EOQ
     q.rstrip! # looks like heredoc adds whitespace in ruby
     q = q + myprop
