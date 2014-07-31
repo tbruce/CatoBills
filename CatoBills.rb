@@ -22,6 +22,7 @@ DC_NS = 'http://purl.org/dc/elements/1.1/'
 CATO_NS = 'http://namespaces.cato.org/catoxml/'
 LII_LEGIS_VOCAB = 'http://liicornell.org/legis/'
 LII_TOP_VOCAB = 'http://liicornell.org/top/'
+CO_VOCAB = 'http://purl.org/co/'
 USC_URI_PREFIX = 'http://liicornell.org/id/uscode/'
 STATL_URI_PREFIX = 'http://liicornell.org/id/statl/'
 PUBL_URI_PREFIX = 'http://liicornell.org/id/publ/'
@@ -128,6 +129,7 @@ class CatoBillFactory
         bill = CatoBill.new(item)
         bill.populate(httpcon)
         bill.extract_refs
+        bill.extract_orgs
         bill.express_triples(frdf)
       end
     end
@@ -159,7 +161,6 @@ class CatoBill
     @version = in_bill['billversion']
     @congress = in_bill['congress']
     @uri = nil
-    #@pathish_uri = nil
     @genre = nil
     @stage = nil
     @title = nil
@@ -167,6 +168,7 @@ class CatoBill
     @legisnum = nil
     @xml = nil
     @refstrings = Array.new()
+    @entrefs = Array.new()
   end
 
   # get all the content of the bill, and its metadata
@@ -234,7 +236,6 @@ class CatoBill
     @legisnum = doc.xpath('//legis-num').first.content
     bflat = @legisnum.gsub(/\.\s+/, '_').downcase
     bnumber = @legisnum.split(/\s+/).last
-    #@pathish_uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}/#{@type}/#{bnumber}")
     @uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}_#{bflat}")
   end
 
@@ -278,11 +279,16 @@ class CatoBill
     puts 'Refstrings compiled...'
   end
 
+  def extract_orgs
+    #TODO
+  end
+
   def express_triples(frdf)
 
     # set up vocabularies
     legis = RDF::Vocabulary.new(RDF::URI(LII_LEGIS_VOCAB))
     liivoc = RDF::Vocabulary.new(RDF::URI(LII_TOP_VOCAB))
+    covoc = RDF::Vocabulary.new(RDF::URI(CO_VOCAB))
 
   begin
     # write triples into string buffer
@@ -307,12 +313,30 @@ class CatoBill
         reftitle = refparts.shift
         refuri = nil
         parenturi = nil
+        firsturi = nil
+        lasturi = nil
         case reftype
           when 'usc' # US Code section reference of some kind
             if refparts.last =~ /\.\./ # it's a range; could be section or subsection
-              next # can't handle these yet
+              refstring = refparts.join('_')
+              rangestr = refparts.pop
+              rangebase = refparts.join('_')
+              refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
+              firsturi = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{rangebase}_" + rangestr.split(/\.\./).first)
+              lasturi = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{rangebase}_" + rangestr.split(/\.\./).last)
+              writer << [refuri, RDF.type, liivoc.UniqueList]
+              writer << [refuri, covoc.firstItem, firsturi]
+              writer << [refuri, covoc.lastItem, lasturi]
+              writer << [@uri, liivoc.refCollection, refuri] unless refuri.nil?
             elsif refparts.last =~ /etseq/ # it's a range
-              next # can't handle these yet
+              refstring = refparts.join('_')
+              refparts.pop # dump the "/etseq" off the end
+              firststr = refparts.join('_')
+              refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
+              firsturi = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{firststr}")
+              writer << [refuri, RDF.type, liivoc.UniqueList]
+              writer << [refuri, covoc.firstItem, firsturi]
+              writer << [@uri, liivoc.refCollection, refuri] unless refuri.nil?
             elsif refparts.last =~ /note/ # it's a section note; there are no subsection notes
               refstring = refparts.join('_')
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
@@ -332,12 +356,21 @@ class CatoBill
                 pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
                 writer << [refuri, FOAF.page, RDF::URI(pagestr)]
               end
-
             end
           when 'usc-chapter'
             if refparts.last =~ /etseq/ # it's a range of chapters (does this really happen?)
               next # can't handle these yet
             elsif refparts.last =~ /note/
+              refparts.pop # get rid of the "/note"
+              refchapter = refparts.shift
+              refsubchapter = refparts.shift unless refparts.length == 0
+              uristr = USC_URI_PREFIX + "#{reftitle}_USC_chapter_#{refchapter}"
+              uristr += "_subchapter_#{refsubchapter}" unless refsubchapter.nil?
+              uristr += '_note'
+              writer << [@uri, liivoc.refUSCode, RDF::URI(uristr)]
+              pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
+              pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
+              writer << [RDF::URI(uristr), FOAF.page, RDF::URI(pagestr)]
             else # it's a simple chapter or subchapter reference
               refchapter = refparts.shift
               refsubchapter = refparts.shift unless refparts.length == 0
