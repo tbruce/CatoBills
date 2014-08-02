@@ -18,7 +18,7 @@ BILL_LIST_URL = 'http://deepbills.cato.org/api/1/bills'
 BILL_API_PREFIX = 'http://deepbills.cato.org/api/1/bill?'
 CONGRESS_GOV_PREFIX = 'https://beta.congress.gov/bill/'
 
-DC_NS = 'http://purl.org/dc/elements/1.1/'
+DC_NS = 'http://purl.org/NET/dc_owl2dl/terms_od/'
 CATO_NS = 'http://namespaces.cato.org/catoxml/'
 LII_LEGIS_VOCAB = 'http://liicornell.org/legis/'
 LII_TOP_VOCAB = 'http://liicornell.org/top/'
@@ -31,15 +31,16 @@ USC_PAGE_PREFIX = 'http://www.law.cornell.edu/uscode/text/'
 
 DBPEDIA_LOOKUP_PREFIX='http://lookup.dbpedia.org/api/search.asmx/KeywordSearch?QueryString='
 
-
-
 # note on URI design for bills
 # generally, looks like http://liicornell.org/id/congress/bills/[congressnum]/[billtype]/[number]
 # where billtypes follow the GPO convention of h, s, hres, sres, hconres, sconres, hjres, sjres
 
 BILL_URI_PREFIX = 'http://liicornell.org/id/us/congress/bills'
+ACT_URI_PREFIX = 'http://liicornell.org/id/us/congress/acts'
 
-# Factory class for Cato bills
+# Factory class for Cato bills.  Methods in this class also manage the http
+# connection with the Cato server, because it's more efficient to set them up
+# and then hand them off to things that iterate over the whole bill list
 class CatoBillFactory
   def initialize
     @bills = Array.new()
@@ -65,7 +66,7 @@ class CatoBillFactory
     # uniqify the bill list to most recent versions.
     # as it comes from Cato, it appears to be sorted by Cato bill number, and within the bill
     # number, by commit date. Not sure it's a good idea to rely on this, so we'll risk some duplicated effort by
-    # sorting here
+    # sorting here.
     puts 'Sorting and de-duping bill list...'
     last_cato_num = -1
     raw_bill_list.sort_by{ |line| [line['billnumber'].to_i, Chronic.parse(line['commitdate']).strftime('%s').to_i]}.each do |item|
@@ -75,7 +76,6 @@ class CatoBillFactory
     end
     puts '...sorted.'
     puts "Most-recentized bill list has #{@bills.length} items"
-
   end
 
   # dump most recent versions as XML
@@ -94,7 +94,6 @@ class CatoBillFactory
       end
     end
   end
-
 
   def take_status_census(exclude_intros = false)
     census = Hash.new()
@@ -129,7 +128,7 @@ class CatoBillFactory
         bill = CatoBill.new(item)
         bill.populate(httpcon)
         bill.extract_refs
-        bill.extract_orgs
+       # bill.extract_orgs
         bill.express_triples(frdf)
       end
     end
@@ -150,10 +149,9 @@ class CatoBill
 
   attr_reader :stage, :title, :dctitle, :legisnum, :type, :genre, :congress, :version, :uri, :pathish_uri,:xml
 
-  # why both initialize and populate?  constructor failure is very hard to handle
-  # intelligently in Ruby if it involves anything more than argument errors, so you don't want to make it dependent
-  # on (eg) network fetches or other things prone to runtime problems. Yes, the object is useless if it can't get its
-  # content over the network, but that doesn't mean that the network fetch should be in the constructor ;)
+  # unfortunately, constructor failure is very hard to handle in ruby, especially if creation of the object
+  # depends on (eg) fetching something from the net. it makes sense to use separate methods to construct an
+  # object and to populate its data, even if an unpopulated object is useless
 
   def initialize (in_bill)
     @type = in_bill['billtype']
@@ -240,7 +238,7 @@ class CatoBill
   end
 
   # extract all references from the bill
-  # Cato documentation is at http://namespaces.cato.org/catoxml
+  # Cato documentation for XML schema is at http://namespaces.cato.org/catoxml
   def extract_refs
     doc = Nokogiri::XML(@xml)
     doc.remove_namespaces!
@@ -283,8 +281,8 @@ class CatoBill
     #TODO
   end
 
+  # generate triples and write them to a file
   def express_triples(frdf)
-
     # set up vocabularies
     legis = RDF::Vocabulary.new(RDF::URI(LII_LEGIS_VOCAB))
     liivoc = RDF::Vocabulary.new(RDF::URI(LII_TOP_VOCAB))
@@ -297,14 +295,12 @@ class CatoBill
       # put me in the graph
       writer << [@uri, RDF.type, legis.LegislativeMeasure]
       writer << [@uri, DC.title, @dctitle]
-      # put my equivalent path-ish URI in the graph
-      #writer << [@pathish_uri, RDF.type, legis.LegislativeMeasure]
-      #writer << [@pathish_uri, OWL.sameAs, @uri]
       # put my congress.gov page in the graph
       utype = 'senate-bill' if @legisnum =~/^S/
       utype = 'house-bill' if @legisnum =~/^H/
       cgurl = CONGRESS_GOV_PREFIX + "#{ordinalize(@congress)}-congress/#{utype}/#{@billnum}"
-      writer << [@uri, FOAF.page, RDF::URI(cgurl)]
+      writer << [@uri, liivoc.hasPage, RDF::URI(cgurl)]
+
       #now process all reference strings from the doc
       @refstrings.each do |ref|
         next if ref.nil?  # not sure how this can happen
@@ -317,7 +313,7 @@ class CatoBill
         lasturi = nil
         case reftype
           when 'usc' # US Code section reference of some kind
-            if refparts.last =~ /\.\./ # it's a range; could be section or subsection
+            if refparts.last =~ /\.\./ # it's a run of sections or subsections
               refstring = refparts.join('_')
               rangestr = refparts.pop
               rangebase = refparts.join('_')
@@ -342,7 +338,7 @@ class CatoBill
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
               writer << [@uri, liivoc.refUSCode, refuri] unless refuri.nil?
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
-              writer << [refuri, FOAF.page, RDF::URI(pagestr)]
+              writer << [refuri, liivoc.hasPage, RDF::URI(pagestr)]
             else # it's a simple section or subsection reference
               refstring = refparts.join('_')
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
@@ -351,10 +347,10 @@ class CatoBill
                 parenturi = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refparts[0]}")
                 writer << [parenturi, liivoc.containsTransitive, refuri]
                 pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
-                writer << [parenturi, FOAF.page, RDF::URI(pagestr)]
+                writer << [parenturi, liivoc.hasPage, RDF::URI(pagestr)]
               else
                 pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
-                writer << [refuri, FOAF.page, RDF::URI(pagestr)]
+                writer << [refuri, liivoc.hasPage, RDF::URI(pagestr)]
               end
             end
           when 'usc-chapter'
@@ -370,7 +366,7 @@ class CatoBill
               writer << [@uri, liivoc.refUSCode, RDF::URI(uristr)]
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
               pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
-              writer << [RDF::URI(uristr), FOAF.page, RDF::URI(pagestr)]
+              writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]
             else # it's a simple chapter or subchapter reference
               refchapter = refparts.shift
               refsubchapter = refparts.shift unless refparts.length == 0
@@ -379,7 +375,7 @@ class CatoBill
               writer << [@uri, liivoc.refUSCode, RDF::URI(uristr)]
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
               pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
-              writer << [RDF::URI(uristr), FOAF.page, RDF::URI(pagestr)]
+              writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]
             end
           when 'usc-appendix'
             next # not handling these right now
@@ -387,20 +383,29 @@ class CatoBill
             uristr = PUBL_URI_PREFIX + "#{reftitle}_PL_#{refparts[0]}"
             writer << [@uri , liivoc.refPubL, RDF::URI(uristr)]
             pagestr = "http://www.gpo.gov/fdsys/pkg/PLAW-#{reftitle}publ#{refparts[0]}/pdf/PLAW-#{reftitle}publ#{refparts[0]}.pdf"
-            writer << [RDF::URI(uristr), FOAF.page, RDF::URI(pagestr)]    #blah
+            writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]    #blah
           when 'statute-at-large'
             uristr = STATL_URI_PREFIX + "#{reftitle}_Stat_#{refparts[0]}"
             writer << [@uri , liivoc.refStatL, RDF::URI(uristr)]
-
+            if reftitle.to_i >= 65
+              pagestr = "http://www.gpo.gov/fdsys/pkg/STATUTE-#{reftitle}/pdf/STATUTE-#{reftitle}pg#{refparts[0]}.pdf"
+              writer << [RDF::URI(uristr) , liivoc.hasPage, RDF::URI(pagestr)]
+            end
           else # it's an act
+            # "stem" it and record a URI
+            # we're picking up section-level references without titles, I think
+            if reftitle =~ /^[A-Z]/
+              acturi = RDF::URI(ACT_URI_PREFIX + '/' + reftitle.gsub(/[\s,]/,'_'))
+              writer << [@uri, legis.refAct, acturi ]
+            end
             # pull a PL reference if possible
             # if we get a PL reference, check to see if there's a section. If so, try Table 3 for an actual USC cite
             # also record the entire Cato ref in case we find a use for it.
-            writer << [@uri, legis.hasCatoAct, ref ]
+            writer << [@uri, legis.hasCatoRef, ref ]
             # check for dbPedia article on the Act
             dbpuri = get_dbpedia_ref(reftitle.split(/:/)[0])
             unless dbpuri.nil?
-              writer << [@uri, DC.references, RDF::URI(dbpuri)]
+              writer << [@uri, liivoc.refDBPedia, RDF::URI(dbpuri)]
             end
         end
       end
@@ -412,6 +417,7 @@ class CatoBill
     frdf << rdfout # dump buffer to file
   end
 
+  # find the ordinal expression for an integer
    def ordinalize(myi)
     if (11..13).include?(myi % 100)
       "#{myi}th"
@@ -425,6 +431,8 @@ class CatoBill
     end
    end
 
+  # search for a legal resource in dbPedia. results of a search could be anything
+  # so we filter by looking for "law words" in the category
   def get_dbpedia_ref(lookupstr)
     looker = DBPEDIA_LOOKUP_PREFIX + "#{CGI::escape(lookupstr)}"
     c = Curl.get(looker) do |c|
@@ -446,6 +454,7 @@ class CatoBill
 
 end
 
+# class that runs this show
 class CatoRunner
   def initialize(opt_hash)
     @opts = opt_hash
@@ -463,18 +472,15 @@ class CatoRunner
       Dir.mkdir(@opts.dump_xml_bills) unless Dir.exist?(@opts.dump_xml_bills)
       @factory.dump_xml_bills(@opts.dump_xml_bills,@exclude_intros)
     end
-
-
     if @opts.profile_me
       result = RubyProf.stop
       printer = RubyProf::FlatPrinter.new(result)
       printer.print(STDOUT, {})
     end
   end
-
-
 end
 
+# set up command line options
 opts = Trollop::options do
   banner <<-EOBANNER
 CatoBills is a Swiss Army knife for working with Cato's "deepbills" data; see their
@@ -485,7 +491,7 @@ Usage:
 where options are:
   EOBANNER
   opt :take_census, 'Take a census of bill-stage information'
-  opt :dump_xml_bills, 'Dump latest versions of XML bills as files' , :default => '/tmp/catobills', :type => :string
+  opt :dump_xml_bills, 'Dump latest versions of XML bills as files' , :default => nil, :type => :string
   opt :triplify_refs, 'Create n-triples representing references to primary law in each bill', :type => :string, :default => nil
   opt :profile_me, 'Invoke the Ruby profiler on this code'
   opt :exclude_intros, 'Exclude introduction-only bills'

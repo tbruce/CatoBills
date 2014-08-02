@@ -21,10 +21,10 @@ class CatoBillsJsonFactory
     @cleanpath_file = File.new(CLEANPATH_FILE, 'w')
   end
 
+  # not much to this method, but it may get some bulk if
+  # we have to run different types of references
   def run
-    ['USC'].each do |type|
-      run_uri_list(type)
-    end
+    run_uri_list('USC')
   end
 
   # processes all cited-to URIs for CFR, US Code, Supreme Court
@@ -48,7 +48,7 @@ class CatoBillsJsonFactory
       # get the JSON
       do_item(o, o, type)
 
-      #if it's a CFR part or subpart reference, stick it in the list for expansion
+      #if it's a USC chapter or subchapter reference, stick it in the list for expansion
       expansion_list.push(o) if type == 'USC' && o =~ /_chapter_/  #should get chapters and subchapters
       expansion_list.push(o) if type == 'USC' && o =~ /\.\./  # ranges
       expansion_list.push(o) if type == 'USC' && o =~ /etseq/  # ranges
@@ -62,7 +62,6 @@ class CatoBillsJsonFactory
       result.each do |item|
         do_item(item[:s].to_s, o, type)
       end
-
     end
   end
 
@@ -71,6 +70,7 @@ class CatoBillsJsonFactory
     rootdir = ''
     myprop = ''
     myuri = ''
+    pathprefix = ''
 
     case type
       when 'CFR'
