@@ -339,6 +339,7 @@ class CatoBill
               writer << [@uri, liivoc.refUSCode, refuri] unless refuri.nil?
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
               writer << [refuri, liivoc.hasPage, RDF::URI(pagestr)]
+              writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
             else # it's a simple section or subsection reference
               refstring = refparts.join('_')
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
@@ -348,9 +349,11 @@ class CatoBill
                 writer << [parenturi, liivoc.containsTransitive, refuri]
                 pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
                 writer << [parenturi, liivoc.hasPage, RDF::URI(pagestr)]
+                writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
               else
                 pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
                 writer << [refuri, liivoc.hasPage, RDF::URI(pagestr)]
+                writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
               end
             end
           when 'usc-chapter'
@@ -367,6 +370,7 @@ class CatoBill
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
               pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
               writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]
+              writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
             else # it's a simple chapter or subchapter reference
               refchapter = refparts.shift
               refsubchapter = refparts.shift unless refparts.length == 0
@@ -376,6 +380,7 @@ class CatoBill
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
               pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
               writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]
+              writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
             end
           when 'usc-appendix'
             next # not handling these right now
@@ -384,12 +389,14 @@ class CatoBill
             writer << [@uri , liivoc.refPubL, RDF::URI(uristr)]
             pagestr = "http://www.gpo.gov/fdsys/pkg/PLAW-#{reftitle}publ#{refparts[0]}/pdf/PLAW-#{reftitle}publ#{refparts[0]}.pdf"
             writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]    #blah
+            writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
           when 'statute-at-large'
             uristr = STATL_URI_PREFIX + "#{reftitle}_Stat_#{refparts[0]}"
             writer << [@uri , liivoc.refStatL, RDF::URI(uristr)]
             if reftitle.to_i >= 65
               pagestr = "http://www.gpo.gov/fdsys/pkg/STATUTE-#{reftitle}/pdf/STATUTE-#{reftitle}pg#{refparts[0]}.pdf"
               writer << [RDF::URI(uristr) , liivoc.hasPage, RDF::URI(pagestr)]
+              writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
             end
           else # it's an act
             # "stem" it and record a URI
