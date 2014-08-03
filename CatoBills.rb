@@ -158,7 +158,8 @@ end
 
 class CatoBill
 
-  attr_reader :stage, :title, :dctitle, :legisnum, :type, :genre, :congress, :version, :uri, :pathish_uri, :xml
+  attr_reader :stage, :title, :dctitle, :short_title :legisnum, :type
+  attr_reader :genre, :congress, :version, :uri, :pathish_uri, :xml
 
   # unfortunately, constructor failure is very hard to handle in ruby, especially if creation of the object
   # depends on (eg) fetching something from the net. it makes sense to use separate methods to construct an
@@ -174,6 +175,7 @@ class CatoBill
     @stage = nil
     @title = nil
     @dctitle = nil
+    @short_title = nil
     @legisnum = nil
     @xml = nil
     @refstrings = Array.new()
@@ -242,6 +244,7 @@ class CatoBill
     @title = doc.xpath('//official-title').first.content.gsub(/[\s\t\n]+/,' ')
     @dctitle = doc.xpath('//dc:title', 'dc' => DC_NS).first.content unless doc.xpath('//dc:title', 'dc' => DC_NS).first.nil?
     @dctitle = title.dup if @dctitle.nil?
+    @short_title = doc.xpath('//short-title').first.content unless doc.xpath('short-title').first.nil?
     @legisnum = doc.xpath('//legis-num').first.content
     bflat = @legisnum.gsub(/\.\s+/, '_').downcase
     bnumber = @legisnum.split(/\s+/).last
@@ -306,6 +309,7 @@ class CatoBill
       # put me in the graph
       writer << [@uri, RDF.type, legis.LegislativeMeasure]
       writer << [@uri, DC.title, @dctitle]
+      writer << [@uri, legis.hasShortTitle, @short_title] unless @short_title.nil?
       # put my congress.gov page in the graph
       utype = 'senate-bill' if @legisnum =~/^S/
       utype = 'house-bill' if @legisnum =~/^H/

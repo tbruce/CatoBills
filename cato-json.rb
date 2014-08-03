@@ -13,7 +13,7 @@ require 'linkeddata'
 class CatoBillsJsonFactory
   def initialize
     @sparql = SPARQL::Client.new(CATO_ENDPOINT)
-    @uscsparql = SPARQL::Client.new(USC_ENDPOINT)
+    #@uscsparql = SPARQL::Client.new(USC_ENDPOINT)
     @json_sparql = SPARQL::Client.new(CATO_ENDPOINT)
     #initialize the directory structure, including killing all the old stuff
     reset_dirs()
@@ -21,83 +21,66 @@ class CatoBillsJsonFactory
     @cleanpath_file = File.new(CLEANPATH_FILE, 'w')
   end
 
-  # not much to this method, but it may get some bulk if
-  # we have to run different types of references
+  # process USC references
   def run
-    run_uri_list()
-  end
-
-  # processes all cited-to URIs for CFR, US Code, Supreme Court
-  def run_uri_list(type)
     expansion_list = Array.new
-
-    refquery = <<- EOQUERY
+    refquery = <<-EOQUERY
     SELECT DISTINCT ?o
       WHERE {
-        ?s <http://liicornell.org/top/refUSCode> ?o .
-        ?s <http://liicornell.org/top/refUSCodeCollection> ?o .
+        {
+          ?s <http://liicornell.org/top/refUSCode> ?o
+        } UNION {
+          ?s <http://liicornell.org/top/refCollection> ?o } .
       }
     EOQUERY
     result = @sparql.query(refquery)
     result.each do |item|
       o = item[:o].to_s
-      # cleanup of bad USC URIs from Citationer
-      o.gsub!(/_USC_A\._/, '_USC_')
 
-      # get the JSON
-      do_item(o, o, type)
-
-      #if it's a USC chapter or subchapter reference, stick it in the list for expansion
-      expansion_list.push(o) if type == 'USC' && o =~ /_chapter_/  #should get chapters and subchapters
-      expansion_list.push(o) if type == 'USC' && o =~ /\.\./  # ranges
-      expansion_list.push(o) if type == 'USC' && o =~ /etseq/  # ranges
-    end
-
-    #run actual URI list
-    # now run the list of "expandable"  URIs
-    expansion_list.each do |o|
-      q = "SELECT DISTINCT ?s WHERE { ?s  <http://liicornell.org/liicfr/belongsToTransitive> <#{o}> . }"
-      result = @uscsparql.query(q)
-      result.each do |item|
-        do_item(item[:s].to_s, o, type)
+      # it may be a subsection reference.  If so, we need to figure out its parent.
+      # given the URI design, we could do that by truncation.  In theory that's dangerous, but in
+      # reality the code that creates the triples  creates the URI for the object of the belongsToTransitive
+      # property by.... truncation.  So, why not?
+      unless o =~ /(chapter|\.\.|etseq|note)/
+        o = o.split(/_/)[0..2].join('_')
       end
+
+      # get the JSON for sections, subsections, chapters, subchapters
+      do_item(o, o) unless o =~ /\.\./ || o =~ /etseq/
+
+      #if it's a USC chapter or subchapter reference, or a range,  stick it in the list for expansion
+      expansion_list.push(o) if o =~ /_chapter_/ #should get chapters and subchapters
+      expansion_list.push(o) if o =~ /\.\./ # ranges
+      expansion_list.push(o) if o =~ /etseq/ # ranges
     end
+
+    #TODO -- write code for range and chapter/subchapter expansion
+    # now run the list of "expandable"  URIs
+    #expansion_list.each do |o|
+    #  q = "SELECT DISTINCT ?s WHERE { ?s  <http://liicornell.org/liicfr/belongsToTransitive> <#{o}> . }"
+    #  result = @uscsparql.query(q)
+    #  result.each do |item|
+    #    do_item(item[:s].to_s, o)
+    #  end
+    #end
   end
 
-  def do_item(filename_uri, lookup_uri, type)
+  def do_item(filename_uri, lookup_uri)
     # construct the path, filename
-    rootdir = ''
-    myprop = ''
     myuri = ''
-    pathprefix = ''
+    rootdir = JSON_ROOT_DIRECTORY + '/uscode'
+    uristart = 'usc:'
+    urimid = '_USC_'
+    myprop = 'refUSCode'
+    pathprefix = 'uscode'
 
-    case type
-      when 'CFR'
-        rootdir = JSON_ROOT_DIRECTORY + '/cfr'
-        uristart = 'cfr:'
-        urimid = '_CFR_'
-        myprop = 'refCFR'
-        pathprefix = 'cfr'
-      when 'USC'
-        rootdir = JSON_ROOT_DIRECTORY + '/uscode'
-        uristart = 'usc:'
-        urimid = '_USC_'
-        myprop = 'refUSCode'
-        pathprefix = 'uscode'
-      when 'SCOTUS'
-        rootdir = JSON_ROOT_DIRECTORY + '/supremecourt'
-        uristart = 'scotus:'
-        urimid = '_US_'
-        myprop = 'refSCOTUS'
-        pathprefix = 'supremecourt'
-    end
     parts = filename_uri.split('/')
     cite = parts.pop
-    if type == 'USC' && cite =~ /_chapter_/
+    if  cite =~ /_chapter_/
       vol_or_title, midbit, partplc, pg_or_section = cite.split('_')
       cln_pg_or_section = 'chapter-' + pg_or_section
       pg_or_section = 'chapter_' + pg_or_section
-    elsif type == 'USC' && cite =~ /_subchapter_/
+    elsif cite =~ /_subchapter_/
       vol_or_title, midbit, partplc, pg_or_section = cite.split('_')
       cln_pg_or_section = 'subchapter-' + pg_or_section
       pg_or_section = 'subchapter_' + pg_or_section
@@ -109,48 +92,35 @@ class CatoBillsJsonFactory
     parentdir = rootdir + '/' + vol_or_title
     mydir = parentdir + '/' + pg_or_section
 
-    # did we do this one already?
+    # did we do this one already? we can't be sure without checking, because even though the
+    # queries have all returned DISTINCT results, the expansions may overlap in some way
+    # and hence create duplicated entries (eg if we have both a subchapter ref and ref to the
+    # chapter that contains it)
     return if File.exists?(mydir + '/catobills.json')
 
-    @cleanpath_file <<  "#{pathprefix}/text/#{vol_or_title}/#{cln_pg_or_section}\n"
+    @cleanpath_file << "#{pathprefix}/text/#{vol_or_title}/#{cln_pg_or_section}\n"
 
     Dir.mkdir(parentdir) unless Dir.exist?(parentdir)
     Dir.mkdir(mydir) unless Dir.exist?(mydir)
     myuri = uristart + vol_or_title + urimid + pg_or_section
 
     # get the JSON
-    q = <<EOQ
-     PREFIX rdfs:<http://www.w3.org/2000/01/rdf-schema#>
-     PREFIX owl:<http://www.w3.org/2002/07/owl#>
-     PREFIX xsd:<http://www.w3.org/2001/XMLSchema#>
-     PREFIX rdf:<http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-     PREFIX xml:<http://www.w3.org/XML/1998/namespace>
-     PREFIX skos:<http://www.w3.org/2004/02/skos/core#>
-     PREFIX dct:<http://purl.org/dc/terms/>
-     PREFIX usc:<http://liicornell.org/id/uscode/>
-     PREFIX foaf: <http://xmlns.com/foaf/0.1/>
-
-
-     SELECT DISTINCT ?title ?page
+    q = <<-EOQ
+    PREFIX usc:<http://liicornell.org/id/uscode/>
+    PREFIX lii:<http://liicornell.org/top/>
+    PREFIX dct:<http://purl.org/dc/terms/>
+    SELECT DISTINCT ?title ?page
      WHERE {
        ?bill dct:title ?title .
-       ?bill foaf:page ?page .
-       ?author foaf:name ?authname .
-       ?author scholar:institutionBio ?biolink .
-       OPTIONAL { ?author owl:sameAs ?dbpsame FILTER regex (str(?dbpsame),'dbpedia', 'i')}
-       ?work dct:contributor ?author
-       FILTER regex (str(?author),'scholars','i') .
-           {
-               SELECT ?work
-               WHERE { ?work scholar:
-EOQ
+       ?bill lii:hasPage ?page .
+       ?bill lii:refUSCode #{myuri}
+      }
+    EOQ
     q.rstrip! # looks like heredoc adds whitespace in ruby
-    q = q + myprop
-    q = q + ' '
-    q = q + "<#{lookup_uri}>"
-    q = q + ' . } } }'
+
     begin
       results = @json_sparql.query(q)
+      return if results.empty?    #TODO intercept proposed sections that can cause this
     rescue Exception => e
       $stderr.puts "JSON query blew out for URI #{lookup_uri} :"
       $stderr.puts e.message
@@ -167,21 +137,16 @@ EOQ
 
 
 # make sure we have the directories we need
-
   def reset_dirs
     Dir.mkdir(JSON_ROOT_DIRECTORY) unless Dir.exist?(JSON_ROOT_DIRECTORY)
-
-    Dir.mkdir(JSON_ROOT_DIRECTORY + '/cfr') unless Dir.exist?(JSON_ROOT_DIRECTORY + '/cfr')
     Dir.mkdir(JSON_ROOT_DIRECTORY + '/uscode') unless Dir.exist?(JSON_ROOT_DIRECTORY + '/uscode')
-    Dir.mkdir(JSON_ROOT_DIRECTORY + '/supremecourt') unless Dir.exist?(JSON_ROOT_DIRECTORY + '/supremecourt')
 
     Find.find(JSON_ROOT_DIRECTORY) do |path|
       FileUtils.rm_f(path) if path =~ /catobills\.json/
     end
-
   end
 
-end
+end  # class
 
 
 factory = CatoBillsJsonFactory.new()
