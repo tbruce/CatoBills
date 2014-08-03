@@ -333,7 +333,7 @@ class CatoBill
               writer << [refuri, RDF.type, liivoc.UniqueList]
               writer << [refuri, covoc.firstItem, firsturi]
               writer << [refuri, covoc.lastItem, lasturi]
-              writer << [@uri, liivoc.refCollection, refuri] unless refuri.nil?
+              writer << [@uri, liivoc.refUSCodeCollection, refuri] unless refuri.nil?
             elsif refparts.last =~ /etseq/ # it's a range
               refstring = refparts.join('_')
               refparts.pop # dump the "/etseq" off the end
@@ -342,7 +342,7 @@ class CatoBill
               firsturi = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{firststr}")
               writer << [refuri, RDF.type, liivoc.UniqueList]
               writer << [refuri, covoc.firstItem, firsturi]
-              writer << [@uri, liivoc.refCollection, refuri] unless refuri.nil?
+              writer << [@uri, liivoc.refUSCodeCollection, refuri] unless refuri.nil?
             elsif refparts.last =~ /note/ # it's a section note; there are no subsection notes
               refstring = refparts.join('_')
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
@@ -393,7 +393,7 @@ class CatoBill
               writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
             end
           when 'usc-appendix'
-            next # not handling these right now
+            next #TODO not handling these right now
           when 'public-law'
             uristr = PUBL_URI_PREFIX + "#{reftitle}_PL_#{refparts[0]}"
             writer << [@uri , liivoc.refPubL, RDF::URI(uristr)]

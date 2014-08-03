@@ -1,5 +1,5 @@
 CATO_ENDPOINT='http://174.129.152.17:8080/openrdf-sesame/repositories/catobills'
-USC_ENDPOINT='http://23.22.254.142:8080/openrdf-sesame/repositories/CFR_structure'   ## wtf?
+##USC_ENDPOINT='http://23.22.254.142:8080/openrdf-sesame/repositories/CFR_structure'   ## wtf?
 JSON_ROOT_DIRECTORY='/var/data/json'
 CLEANPATH_FILE = '/home/tom/Dropbox/Cato/catobills.cleanpath.whacker.txt'
 
@@ -24,22 +24,21 @@ class CatoBillsJsonFactory
   # not much to this method, but it may get some bulk if
   # we have to run different types of references
   def run
-    run_uri_list('USC')
+    run_uri_list()
   end
 
   # processes all cited-to URIs for CFR, US Code, Supreme Court
   def run_uri_list(type)
     expansion_list = Array.new
-    case type
-      when 'CFR'
-        predicate = '<http://liicornell.org/top/refCFR>'
-      when 'USC'
-        predicate = '<http://liicornell.org/top/refUSCode>'
-      when 'SCOTUS'
-        predicate = '<http://liicornell.org/top/refSCOTUS>'
-    end
-    # query
-    result = @sparql.query("SELECT DISTINCT ?o WHERE {?s #{predicate} ?o .}")
+
+    refquery = <<- EOQUERY
+    SELECT DISTINCT ?o
+      WHERE {
+        ?s <http://liicornell.org/top/refUSCode> ?o .
+        ?s <http://liicornell.org/top/refUSCodeCollection> ?o .
+      }
+    EOQUERY
+    result = @sparql.query(refquery)
     result.each do |item|
       o = item[:o].to_s
       # cleanup of bad USC URIs from Citationer

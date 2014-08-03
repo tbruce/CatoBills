@@ -1,0 +1,14 @@
+
+PREFIX dct:<http://purl.org/dc/terms/>
+PREFIX liitop:<http://liicornell.org/top/>
+
+SELECT DISTINCT ?title ?page
+WHERE {
+ ?bill liitop:hasPage ?page .
+ ?bill dct:title ?title .
+ ?bill liitop:refUSCode ?childCode
+   {
+   SELECT ?childCode
+   WHERE {?childCode liitop:belongsToTransitive  <http://liicornell.org/id/uscode/22_USC_8727> .}
+}
+}
