@@ -14,6 +14,10 @@ include RDF
 HTTP_READ_TIMEOUT = 300
 BILL_RETRY_COUNT = 5
 BILL_RETRY_INTERVAL = 3
+
+DEFAULT_XML_DUMPDIR = '/tmp/catoxml'
+DEFAULT_TRIPLEFILE = '/tmp/catotriples.nt'
+
 BILL_LIST_URL = 'http://deepbills.cato.org/api/1/bills'
 BILL_API_PREFIX = 'http://deepbills.cato.org/api/1/bill?'
 CONGRESS_GOV_PREFIX = 'https://beta.congress.gov/bill/'
@@ -80,7 +84,7 @@ class CatoBillFactory
 
   # dump most recent versions as XML
   def dump_xml_bills(dumpdir, exclude_intros)
-    # check to see that we have the directory that we need
+    billcount = 0
     server_uri = URI(BILL_API_PREFIX)
     httpcon = Net::HTTP.new(server_uri.host, server_uri.port)
     httpcon.read_timeout = HTTP_READ_TIMEOUT
@@ -89,10 +93,13 @@ class CatoBillFactory
         next if exclude_intros && item['billversion'] =~ /^i/
         bill = CatoBill.new(item)
         bill.populate(httpcon)
+        next if bill.xml.nil?
         myfile = File.new(dumpdir + '/' + bill.uri.to_s.split(/\//).pop + '.xml', 'w')
         myfile << bill.xml
+        billcount += 1
       end
     end
+    puts "#{billcount} bills processed"
   end
 
   def take_status_census(exclude_intros = false)
@@ -119,6 +126,7 @@ class CatoBillFactory
 
   def triplify_refs (triplefile, exclude_intros = false)
     server_uri = URI(BILL_API_PREFIX)
+    billcount = 0
     frdf = File.open(triplefile, 'w+')
     httpcon = Net::HTTP.new(server_uri.host, server_uri.port)
     httpcon.read_timeout = HTTP_READ_TIMEOUT
@@ -127,12 +135,15 @@ class CatoBillFactory
         next if exclude_intros && item['billversion'] =~ /^i/
         bill = CatoBill.new(item)
         bill.populate(httpcon)
+        next if bill.xml.nil?
         bill.extract_refs
        # bill.extract_orgs
         bill.express_triples(frdf)
+        billcount += 1
       end
     end
     frdf.close
+    puts "#{billcount} bills processed."
   end
 
 
@@ -147,11 +158,11 @@ end
 
 class CatoBill
 
-  attr_reader :stage, :title, :dctitle, :legisnum, :type, :genre, :congress, :version, :uri, :pathish_uri,:xml
+  attr_reader :stage, :title, :dctitle, :legisnum, :type, :genre, :congress, :version, :uri, :pathish_uri, :xml
 
   # unfortunately, constructor failure is very hard to handle in ruby, especially if creation of the object
   # depends on (eg) fetching something from the net. it makes sense to use separate methods to construct an
-  # object and to populate its data, even if an unpopulated object is useless
+  # object and to populate its data, even if an unpopulated object is useless --
 
   def initialize (in_bill)
     @type = in_bill['billtype']
@@ -171,7 +182,7 @@ class CatoBill
 
   # get all the content of the bill, and its metadata
   def populate (httpcon = nil)
-    @xml = fetch_bill (httpcon)
+    @xml = fetch_bill(httpcon)
     return nil if @xml.nil?
     extract_meta
   end
@@ -206,11 +217,11 @@ class CatoBill
      retry if (retries -= 1) > 0
     end
     if resp.nil?
-      $stderr.puts "Cato bill fetch failed for bill number #{@billnum}"
+      puts "Bill fetch failed for bill number #{@billnum}"
       return nil
     end
     finish = Time.now
-    puts "Fetched Cato bill number #{@billnum}, tries =  #{BILL_RETRY_COUNT - retries + 1}, tt = #{finish - start}"
+    puts "Fetched bill number #{@billnum}, tries =  #{BILL_RETRY_COUNT - retries + 1}, tt = #{finish - start}"
     billhash = JSON.parse(resp.body)
     return billhash['billbody']
   end
@@ -241,7 +252,7 @@ class CatoBill
   # Cato documentation for XML schema is at http://namespaces.cato.org/catoxml
   def extract_refs
     doc = Nokogiri::XML(@xml)
-    doc.remove_namespaces!
+    doc.remove_namespaces!  # dangerous, but OK in this case b/c Cato was careful about overlaps
     doc.xpath("//entity-ref[@entity-type='act']").each do |refelem|
       @refstrings.push(refelem.attr('value'))
     end
@@ -300,10 +311,9 @@ class CatoBill
       utype = 'house-bill' if @legisnum =~/^H/
       cgurl = CONGRESS_GOV_PREFIX + "#{ordinalize(@congress)}-congress/#{utype}/#{@billnum}"
       writer << [@uri, liivoc.hasPage, RDF::URI(cgurl)]
-
       #now process all reference strings from the doc
       @refstrings.each do |ref|
-        next if ref.nil?  # not sure how this can happen
+        next if ref.nil?  #TODO not sure how this can happen; should probably trap for it elsewhere
         refparts = ref.split(/\//)
         reftype = refparts.shift if refparts.length > 1
         reftitle = refparts.shift
@@ -393,6 +403,7 @@ class CatoBill
           when 'statute-at-large'
             uristr = STATL_URI_PREFIX + "#{reftitle}_Stat_#{refparts[0]}"
             writer << [@uri , liivoc.refStatL, RDF::URI(uristr)]
+            # Volume 65 of StatL is currently the earliest available at GPO
             if reftitle.to_i >= 65
               pagestr = "http://www.gpo.gov/fdsys/pkg/STATUTE-#{reftitle}/pdf/STATUTE-#{reftitle}pg#{refparts[0]}.pdf"
               writer << [RDF::URI(uristr) , liivoc.hasPage, RDF::URI(pagestr)]
@@ -405,7 +416,7 @@ class CatoBill
               acturi = RDF::URI(ACT_URI_PREFIX + '/' + reftitle.gsub(/[\s,]/,'_'))
               writer << [@uri, legis.refAct, acturi ]
             end
-            # pull a PL reference if possible
+            #TODO: pull a PL reference if possible
             # if we get a PL reference, check to see if there's a section. If so, try Table 3 for an actual USC cite
             # also record the entire Cato ref in case we find a use for it.
             writer << [@uri, legis.hasCatoRef, ref ]
@@ -445,6 +456,7 @@ class CatoBill
     c = Curl.get(looker) do |c|
       c.headers['Accept'] = 'application/json'
     end
+
     # unfortunately, the QueryClass parameter for dbPedia lookups is not much help, since class information
     # is often missing.  Best alternative is to use a filter based on dbPedia categories.  Crudely implemented
     # here as a string match against a series of keywords
@@ -463,6 +475,7 @@ end
 
 # class that runs this show
 class CatoRunner
+
   def initialize(opt_hash)
     @opts = opt_hash
     @factory = CatoBillFactory.new()
@@ -473,9 +486,12 @@ class CatoRunner
   def run
     RubyProf.start if @opts.profile_me
     @factory.take_status_census(@exclude_intros) if @opts.take_census
-    @factory.triplify_refs(@opts.triplify_refs, @exclude_intros) if @opts.triplify_refs
-
+    if @opts.triplify_refs
+      @opts.triplify_refs = DEFAULT_TRIPLEFILE if @opts.triplify_refs.nil?
+      @factory.triplify_refs(@opts.triplify_refs, @exclude_intros)
+    end
     if @opts.dump_xml_bills
+      @opts.dump_xml_bills = DEFAULT_XML_DUMPDIR if @opts.dump_xml_bills.nil?
       Dir.mkdir(@opts.dump_xml_bills) unless Dir.exist?(@opts.dump_xml_bills)
       @factory.dump_xml_bills(@opts.dump_xml_bills,@exclude_intros)
     end
@@ -485,6 +501,7 @@ class CatoRunner
       printer.print(STDOUT, {})
     end
   end
+
 end
 
 # set up command line options
@@ -498,7 +515,7 @@ Usage:
 where options are:
   EOBANNER
   opt :take_census, 'Take a census of bill-stage information'
-  opt :dump_xml_bills, 'Dump latest versions of XML bills as files' , :default => nil, :type => :string
+  opt :dump_xml_bills, 'Dump latest versions of XML bills as files' , :type => :string, :default => nil
   opt :triplify_refs, 'Create n-triples representing references to primary law in each bill', :type => :string, :default => nil
   opt :profile_me, 'Invoke the Ruby profiler on this code'
   opt :exclude_intros, 'Exclude introduction-only bills'
