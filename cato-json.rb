@@ -86,23 +86,28 @@ class CatoBillsJsonFactory
       pg_or_section = 'subchapter_' + pg_or_section
     else
       vol_or_title, midbit, pg_or_section = cite.split('_')
-      cln_pg_or_section = pg_or_section.dup
+      cln_pg_or_section = pg_or_section.dup unless pg_or_section.nil?    # could be a reference to a full Title
     end
 
     parentdir = rootdir + '/' + vol_or_title
-    mydir = parentdir + '/' + pg_or_section
+    mydir = parentdir
+    mydir += "/#{pg_or_section}" unless pg_or_section.nil?
+
 
     # did we do this one already? we can't be sure without checking, because even though the
     # queries have all returned DISTINCT results, the expansions may overlap in some way
     # and hence create duplicated entries (eg if we have both a subchapter ref and ref to the
     # chapter that contains it)
     return if File.exists?(mydir + '/catobills.json')
-
-    @cleanpath_file << "#{pathprefix}/text/#{vol_or_title}/#{cln_pg_or_section}\n"
+    my_cleanpath = "#{pathprefix}/text/#{vol_or_title}"
+    my_cleanpath += "/#{cln_pg_or_section}" unless pg_or_section.nil?
+    my_cleanpath += "\n"
+    @cleanpath_file << my_cleanpath
 
     Dir.mkdir(parentdir) unless Dir.exist?(parentdir)
     Dir.mkdir(mydir) unless Dir.exist?(mydir)
-    myuri = uristart + vol_or_title + urimid + pg_or_section
+    myuri = uristart + vol_or_title + urimid
+    myuri +=  pg_or_section  unless pg_or_section.nil?
 
     # get the JSON
     q = <<-EOQ

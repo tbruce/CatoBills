@@ -158,7 +158,7 @@ end
 
 class CatoBill
 
-  attr_reader :stage, :title, :dctitle, :short_title :legisnum, :type
+  attr_reader :stage, :title, :dctitle, :short_title, :legisnum, :type
   attr_reader :genre, :congress, :version, :uri, :pathish_uri, :xml
 
   # unfortunately, constructor failure is very hard to handle in ruby, especially if creation of the object
@@ -224,7 +224,15 @@ class CatoBill
     end
     finish = Time.now
     puts "Fetched bill number #{@billnum}, tries =  #{BILL_RETRY_COUNT - retries + 1}, tt = #{finish - start}"
-    billhash = JSON.parse(resp.body)
+    # Cato server sometimes fails in a way that returns an HTML error page, not JSON
+    begin
+      billhash = JSON.parse(resp.body)
+    rescue  JSON::ParserError => e
+      puts e.message
+      puts e.backtrace.inspect
+      return nil
+    end
+
     return billhash['billbody']
   end
 
@@ -318,6 +326,7 @@ class CatoBill
       #now process all reference strings from the doc
       @refstrings.each do |ref|
         next if ref.nil?  #TODO not sure how this can happen; should probably trap for it elsewhere
+        ref.gsub!(/\x93/, '-')
         refparts = ref.split(/\//)
         reftype = refparts.shift if refparts.length > 1
         reftitle = refparts.shift
@@ -325,6 +334,7 @@ class CatoBill
         parenturi = nil
         firsturi = nil
         lasturi = nil
+        acturi = nil
         case reftype
           when 'usc' # US Code section reference of some kind
             if refparts.last =~ /\.\./ # it's a run of sections or subsections
@@ -338,6 +348,7 @@ class CatoBill
               writer << [refuri, covoc.firstItem, firsturi]
               writer << [refuri, covoc.lastItem, lasturi]
               writer << [@uri, liivoc.refUSCodeCollection, refuri] unless refuri.nil?
+              writer << [refuri, DC.title, "#{reftitle}_USC_#{refstring}" ]
             elsif refparts.last =~ /etseq/ # it's a range
               refstring = refparts.join('_')
               refparts.pop # dump the "/etseq" off the end
@@ -347,27 +358,33 @@ class CatoBill
               writer << [refuri, RDF.type, liivoc.UniqueList]
               writer << [refuri, covoc.firstItem, firsturi]
               writer << [@uri, liivoc.refUSCodeCollection, refuri] unless refuri.nil?
+              writer << [refuri, DC.title, "#{reftitle}_USC_#{refstring}" ]
             elsif refparts.last =~ /note/ # it's a section note; there are no subsection notes
               refstring = refparts.join('_')
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
               writer << [@uri, liivoc.refUSCode, refuri] unless refuri.nil?
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
               writer << [refuri, liivoc.hasPage, RDF::URI(pagestr)]
-              writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
+              writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
+              writer << [refuri, DC.title, "#{reftitle}_USC_#{refstring}" ]
             else # it's a simple section or subsection reference
               refstring = refparts.join('_')
               refuri = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refstring}")
               writer << [@uri, liivoc.refUSCode, refuri] unless refuri.nil?
+              writer << [refuri, DC.title, "#{reftitle}_USC_#{refstring}" ]
               if refparts.length > 1 # subsection reference
                 parenturi = RDF::URI(USC_URI_PREFIX + "#{reftitle}_USC_#{refparts[0]}")
                 writer << [parenturi, liivoc.containsTransitive, refuri]
+                writer << [parenturi, RDF.type, liivoc.section]
                 pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
                 writer << [parenturi, liivoc.hasPage, RDF::URI(pagestr)]
-                writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
+                writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
+                writer << [refuri, RDF.type, liivoc.subsection]
               else
                 pagestr = USC_PAGE_PREFIX + "#{reftitle}/#{refparts[0]}"
                 writer << [refuri, liivoc.hasPage, RDF::URI(pagestr)]
-                writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
+                writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
+                writer << [refuri, RDF.type, liivoc.section]
               end
             end
           when 'usc-chapter'
@@ -384,7 +401,10 @@ class CatoBill
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
               pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
               writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]
-              writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
+              writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
+              tstr =  "#{reftitle}_USC_chapter_#{refchapter}"
+              tstr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
+              writer << [@uri, DC.title, tstr ]
             else # it's a simple chapter or subchapter reference
               refchapter = refparts.shift
               refsubchapter = refparts.shift unless refparts.length == 0
@@ -394,7 +414,10 @@ class CatoBill
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
               pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
               writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]
-              writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
+              writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
+              tstr =  "#{reftitle}_USC_chapter_#{refchapter}"
+              tstr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
+              writer << [@uri, DC.title, tstr ]
             end
           when 'usc-appendix'
             next #TODO not handling these right now
@@ -403,31 +426,35 @@ class CatoBill
             writer << [@uri , liivoc.refPubL, RDF::URI(uristr)]
             pagestr = "http://www.gpo.gov/fdsys/pkg/PLAW-#{reftitle}publ#{refparts[0]}/pdf/PLAW-#{reftitle}publ#{refparts[0]}.pdf"
             writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]    #blah
-            writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
+            writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
+            writer << [@uri, DC.title, "#{reftitle} PL #{refparts[0]}" ]
           when 'statute-at-large'
             uristr = STATL_URI_PREFIX + "#{reftitle}_Stat_#{refparts[0]}"
             writer << [@uri , liivoc.refStatL, RDF::URI(uristr)]
+            writer << [@uri, DC.title, "#{reftitle} Stat.L #{refparts[0]}" ]
             # Volume 65 of StatL is currently the earliest available at GPO
             if reftitle.to_i >= 65
               pagestr = "http://www.gpo.gov/fdsys/pkg/STATUTE-#{reftitle}/pdf/STATUTE-#{reftitle}pg#{refparts[0]}.pdf"
               writer << [RDF::URI(uristr) , liivoc.hasPage, RDF::URI(pagestr)]
-              writer << [RDF::URI(pagestr)], RDF.type, liivoc.LegalWebPage ]
+              writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
             end
           else # it's an act
             # "stem" it and record a URI
             # we're picking up section-level references without titles, I think
+            next if reftitle.nil?
             if reftitle =~ /^[A-Z]/
               acturi = RDF::URI(ACT_URI_PREFIX + '/' + reftitle.gsub(/[\s,]/,'_'))
               writer << [@uri, legis.refAct, acturi ]
             end
+            writer << [@uri, DC.title, reftitle.split(/:/)[0] ]
             #TODO: pull a PL reference if possible
             # if we get a PL reference, check to see if there's a section. If so, try Table 3 for an actual USC cite
             # also record the entire Cato ref in case we find a use for it.
             writer << [@uri, legis.hasCatoRef, ref ]
             # check for dbPedia article on the Act
             dbpuri = get_dbpedia_ref(reftitle.split(/:/)[0])
-            unless dbpuri.nil?
-              writer << [@uri, liivoc.refDBPedia, RDF::URI(dbpuri)]
+            unless dbpuri.nil? || acturi.nil?
+              writer << [acturi, liivoc.refDBPedia, RDF::URI(dbpuri)]
             end
         end
       end
@@ -490,12 +517,9 @@ class CatoRunner
   def run
     RubyProf.start if @opts.profile_me
     @factory.take_status_census(@exclude_intros) if @opts.take_census
-    if @opts.triplify_refs
-      @opts.triplify_refs = DEFAULT_TRIPLEFILE if @opts.triplify_refs.nil?
-      @factory.triplify_refs(@opts.triplify_refs, @exclude_intros)
-    end
+    @factory.triplify_refs(@opts.triplify_refs, @exclude_intros)if @opts.triplify_refs
+
     if @opts.dump_xml_bills
-      @opts.dump_xml_bills = DEFAULT_XML_DUMPDIR if @opts.dump_xml_bills.nil?
       Dir.mkdir(@opts.dump_xml_bills) unless Dir.exist?(@opts.dump_xml_bills)
       @factory.dump_xml_bills(@opts.dump_xml_bills,@exclude_intros)
     end
@@ -519,8 +543,8 @@ Usage:
 where options are:
   EOBANNER
   opt :take_census, 'Take a census of bill-stage information'
-  opt :dump_xml_bills, 'Dump latest versions of XML bills as files' , :type => :string, :default => nil
-  opt :triplify_refs, 'Create n-triples representing references to primary law in each bill', :type => :string, :default => nil
+  opt :dump_xml_bills, "Dump latest versions of XML bills as files in a directory. Default: #{DEFAULT_XML_DUMPDIR}", :type => :string, :default => DEFAULT_XML_DUMPDIR
+  opt :triplify_refs, "Create triples and place them in a file. Default: #{DEFAULT_TRIPLEFILE}", :type => :string, :default => DEFAULT_TRIPLEFILE
   opt :profile_me, 'Invoke the Ruby profiler on this code'
   opt :exclude_intros, 'Exclude introduction-only bills'
 end
