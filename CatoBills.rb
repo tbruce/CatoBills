@@ -1,3 +1,4 @@
+#encoding: utf-8
 require 'fileutils'
 require 'json'
 require 'chronic'
@@ -326,7 +327,7 @@ class CatoBill
       #now process all reference strings from the doc
       @refstrings.each do |ref|
         next if ref.nil?  #TODO not sure how this can happen; should probably trap for it elsewhere
-        ref.gsub!(/\x93/, '-')
+        ref.gsub!(/\x147/, '-')
         refparts = ref.split(/\//)
         reftype = refparts.shift if refparts.length > 1
         reftitle = refparts.shift
