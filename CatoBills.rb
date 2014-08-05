@@ -10,6 +10,7 @@ require 'rdf'
 require 'ruby-prof'
 require 'open-uri'
 require 'cgi'
+require 'iconv'
 include RDF
 
 HTTP_READ_TIMEOUT = 300
@@ -47,7 +48,9 @@ ACT_URI_PREFIX = 'http://liicornell.org/id/us/congress/acts'
 # connection with the Cato server, because it's more efficient to set them up
 # and then hand them off to things that iterate over the whole bill list
 class CatoBillFactory
-  def initialize
+  attr_writer :sample_size
+  def initialize (ssize = nil)
+    @sample_size = ssize
     @bills = Array.new()
     @cong_num = calc_congress()
     fetch_bill_list
@@ -79,6 +82,12 @@ class CatoBillFactory
       @bills.push(item)
       last_cato_num = item['billnumber']
     end
+
+    unless @sample_size.nil?
+      @bills = @bills.sample(@sample_size)
+      puts "Limiting run to #{@sample_size}"
+    end
+
     puts '...sorted.'
     puts "Most-recentized bill list has #{@bills.length} items"
   end
@@ -100,7 +109,7 @@ class CatoBillFactory
         billcount += 1
       end
     end
-    puts "#{billcount} bills processed"
+    puts "#{billcount} bills processed and XML dumped"
   end
 
   def take_status_census(exclude_intros = false)
@@ -327,7 +336,13 @@ class CatoBill
       #now process all reference strings from the doc
       @refstrings.each do |ref|
         next if ref.nil?  #TODO not sure how this can happen; should probably trap for it elsewhere
-        ref.gsub!(/\x147/, '-')
+        # diagnose for bad characters
+        if ref =~ /\p{^ASCII}/
+          badchars = $~
+          puts "Found bad characters #{$~} in ref #{ref} for bill #{@billnum}"
+          ref = Iconv.iconv('ascii//translit', 'utf-8', ref)[0]
+        end
+
         refparts = ref.split(/\//)
         reftype = refparts.shift if refparts.length > 1
         reftitle = refparts.shift
@@ -492,8 +507,15 @@ class CatoBill
     # unfortunately, the QueryClass parameter for dbPedia lookups is not much help, since class information
     # is often missing.  Best alternative is to use a filter based on dbPedia categories.  Crudely implemented
     # here as a string match against a series of keywords
+    begin
+      dbp_results = JSON.parse(c.body_str)
+    rescue  JSON::ParserError => e
+      puts e.message
+      puts e.backtrace.inspect
+      return nil
+    end
 
-    JSON.parse(c.body_str)['results'].each do |entry|
+    dbp_results['results'].each do |entry|
       use_me = false
       entry['categories'].each do |cat|
         use_me = true if cat['label'] =~ /\b(law|legislation|government|Act)\b/
@@ -510,17 +532,17 @@ class CatoRunner
 
   def initialize(opt_hash)
     @opts = opt_hash
-    @factory = CatoBillFactory.new()
+    @factory = CatoBillFactory.new(@opts.limit_run)
     @exclude_intros = false
     @exclude_intros = true if @opts.exclude_intros
   end
 
   def run
     RubyProf.start if @opts.profile_me
-    @factory.take_status_census(@exclude_intros) if @opts.take_census
-    @factory.triplify_refs(@opts.triplify_refs, @exclude_intros)if @opts.triplify_refs
+    @factory.take_status_census(@exclude_intros) if @opts.take_census_given
+    @factory.triplify_refs(@opts.triplify_refs, @exclude_intros)if @opts.triplify_refs_given
 
-    if @opts.dump_xml_bills
+    if @opts.dump_xml_bills_given
       Dir.mkdir(@opts.dump_xml_bills) unless Dir.exist?(@opts.dump_xml_bills)
       @factory.dump_xml_bills(@opts.dump_xml_bills,@exclude_intros)
     end
@@ -542,12 +564,13 @@ project documentation at deepbills.cato.org
 Usage:
     CatoBills.rb [options]
 where options are:
-  EOBANNER
+EOBANNER
   opt :take_census, 'Take a census of bill-stage information'
   opt :dump_xml_bills, "Dump latest versions of XML bills as files in a directory. Default: #{DEFAULT_XML_DUMPDIR}", :type => :string, :default => DEFAULT_XML_DUMPDIR
   opt :triplify_refs, "Create triples and place them in a file. Default: #{DEFAULT_TRIPLEFILE}", :type => :string, :default => DEFAULT_TRIPLEFILE
-  opt :profile_me, 'Invoke the Ruby profiler on this code'
-  opt :exclude_intros, 'Exclude introduction-only bills'
+  opt :profile_me, 'Invoke the Ruby profiler on this code', :default => false
+  opt :exclude_intros, 'Exclude introduction-only bills' ,:default => false
+  opt :limit_run, 'Limit run to a smaller number of bills', :type => :int, :default => nil
 end
 
 runner = CatoRunner.new(opts)
