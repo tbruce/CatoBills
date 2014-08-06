@@ -49,15 +49,15 @@ ACT_URI_PREFIX = 'http://liicornell.org/id/us/congress/acts'
 # and then hand them off to things that iterate over the whole bill list
 class CatoBillFactory
   attr_writer :sample_size
-  def initialize (ssize = nil)
+  def initialize (nointros = false, ssize = nil)
     @sample_size = ssize
     @bills = Array.new()
     @cong_num = calc_congress()
-    fetch_bill_list
+    fetch_bill_list(nointros)
   end
 
   # get the Cato bill list and rubify
-  def fetch_bill_list
+  def fetch_bill_list(nointros = false)
     begin
       bill_list_uri = URI(BILL_LIST_URL)
       bill_list_json = Net::HTTP.get(bill_list_uri)
@@ -78,6 +78,7 @@ class CatoBillFactory
     puts 'Sorting and de-duping bill list...'
     last_cato_num = -1
     raw_bill_list.sort_by{ |line| [line['billnumber'].to_i, Chronic.parse(line['commitdate']).strftime('%s').to_i]}.each do |item|
+      next if nointros && item['billversion'] =~ /^i/
       @bills.pop if item['billnumber'] == last_cato_num
       @bills.push(item)
       last_cato_num = item['billnumber']
@@ -100,7 +101,6 @@ class CatoBillFactory
     httpcon.read_timeout = HTTP_READ_TIMEOUT
     httpcon.start do |http|
       @bills.each do |item|
-        next if exclude_intros && item['billversion'] =~ /^i/
         bill = CatoBill.new(item)
         bill.populate(httpcon)
         next if bill.xml.nil?
@@ -259,7 +259,7 @@ class CatoBill
       stageattr = 'bill-type'
     end
     @stage = doc.xpath("//#{@genre}").attr(stageattr).content unless ( doc.xpath("//#{@genre}").nil? || doc.xpath("//#{@genre}").attr(stageattr).nil? )
-    @title = doc.xpath('//official-title').first.content.gsub(/[\s\t\n]+/,' ')
+    @title = doc.xpath('//official-title').first.content.gsub(/[[:space:]]+/,' ')
     @dctitle = doc.xpath('//dc:title', 'dc' => DC_NS).first.content unless doc.xpath('//dc:title', 'dc' => DC_NS).first.nil?
     @dctitle = title.dup if @dctitle.nil?
     @short_title = doc.xpath('//short-title').first.content unless doc.xpath('short-title').first.nil?
@@ -410,59 +410,63 @@ class CatoBill
               refparts.pop # get rid of the "/note"
               refchapter = refparts.shift
               refsubchapter = refparts.shift unless refparts.length == 0
-              uristr = USC_URI_PREFIX + "#{reftitle}_USC_chapter_#{refchapter}"
-              uristr += "_subchapter_#{refsubchapter}" unless refsubchapter.nil?
-              uristr += '_note'
-              writer << [@uri, liivoc.refUSCode, RDF::URI(uristr)]
+              refstr = USC_URI_PREFIX + "#{reftitle}_USC_chapter_#{refchapter}"
+              refstr += "_subchapter_#{refsubchapter}" unless refsubchapter.nil?
+              refstr += '_note'
+              refuri = RDF::URI(refstr)
+              writer << [@uri, liivoc.refUSCode, refuri]
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
               pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
-              writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]
+              writer << [refuri, liivoc.hasPage, RDF::URI(pagestr)]
               writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
               tstr =  "#{reftitle}_USC_chapter_#{refchapter}"
               tstr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
-              writer << [@uri, DC.title, tstr ]
+              writer << [refuri, DC.title, tstr ]
             else # it's a simple chapter or subchapter reference
               refchapter = refparts.shift
               refsubchapter = refparts.shift unless refparts.length == 0
-              uristr = USC_URI_PREFIX + "#{reftitle}_USC_chapter_#{refchapter}"
-              uristr += "_subchapter_#{refsubchapter}" unless refsubchapter.nil?
-              writer << [@uri, liivoc.refUSCode, RDF::URI(uristr)]
+              refstr = USC_URI_PREFIX + "#{reftitle}_USC_chapter_#{refchapter}"
+              refstr += "_subchapter_#{refsubchapter}" unless refsubchapter.nil?
+              refuri = RDF::URI(refstr)
+              writer << [@uri, liivoc.refUSCode, refuri]
               pagestr = USC_PAGE_PREFIX + "#{reftitle}/chapter-#{refchapter}"
               pagestr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
-              writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]
+              writer << [refuri, liivoc.hasPage, RDF::URI(pagestr)]
               writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
               tstr =  "#{reftitle}_USC_chapter_#{refchapter}"
               tstr += "/subchapter-#{refsubchapter}" unless refsubchapter.nil?
-              writer << [@uri, DC.title, tstr ]
+              writer << [refuri, DC.title, tstr ]
             end
           when 'usc-appendix'
             next #TODO not handling these right now
           when 'public-law'
-            uristr = PUBL_URI_PREFIX + "#{reftitle}_PL_#{refparts[0]}"
-            writer << [@uri , liivoc.refPubL, RDF::URI(uristr)]
+            refstr = PUBL_URI_PREFIX + "#{reftitle}_PL_#{refparts[0]}"
+            refuri = RDF::URI(refstr)
+            writer << [@uri , liivoc.refPubL, refuri]
             pagestr = "http://www.gpo.gov/fdsys/pkg/PLAW-#{reftitle}publ#{refparts[0]}/pdf/PLAW-#{reftitle}publ#{refparts[0]}.pdf"
-            writer << [RDF::URI(uristr), liivoc.hasPage, RDF::URI(pagestr)]    #blah
+            writer << [refuri, liivoc.hasPage, RDF::URI(pagestr)]    #blah
             writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
-            writer << [@uri, DC.title, "#{reftitle} PL #{refparts[0]}" ]
+            writer << [refuri, DC.title, "#{reftitle} PL #{refparts[0]}" ]
           when 'statute-at-large'
-            uristr = STATL_URI_PREFIX + "#{reftitle}_Stat_#{refparts[0]}"
-            writer << [@uri , liivoc.refStatL, RDF::URI(uristr)]
-            writer << [@uri, DC.title, "#{reftitle} Stat.L #{refparts[0]}" ]
+            refstr = STATL_URI_PREFIX + "#{reftitle}_Stat_#{refparts[0]}"
+            refuri = RDF::URI(refstr)
+            writer << [@uri , liivoc.refStatL, refuri]
+            writer << [refuri, DC.title, "#{reftitle} Stat.L #{refparts[0]}" ]
             # Volume 65 of StatL is currently the earliest available at GPO
             if reftitle.to_i >= 65
               pagestr = "http://www.gpo.gov/fdsys/pkg/STATUTE-#{reftitle}/pdf/STATUTE-#{reftitle}pg#{refparts[0]}.pdf"
-              writer << [RDF::URI(uristr) , liivoc.hasPage, RDF::URI(pagestr)]
+              writer << [refuri , liivoc.hasPage, RDF::URI(pagestr)]
               writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
             end
           else # it's an act
             # "stem" it and record a URI
             # we're picking up section-level references without titles, I think
             next if reftitle.nil?
-            if reftitle =~ /^[A-Z]/
-              acturi = RDF::URI(ACT_URI_PREFIX + '/' + reftitle.gsub(/[\s,]/,'_'))
-              writer << [@uri, legis.refAct, acturi ]
-            end
-            writer << [@uri, DC.title, reftitle.split(/:/)[0] ]
+            next unless reftitle =~ /^[A-Z]/
+            acturi = RDF::URI(ACT_URI_PREFIX + '/' + reftitle.gsub(/[\s,]/,'_'))
+            writer << [@uri, legis.refAct, acturi ]
+
+            writer << [acturi, DC.title, reftitle.split(/:/)[0] ]
             #TODO: pull a PL reference if possible
             # if we get a PL reference, check to see if there's a section. If so, try Table 3 for an actual USC cite
             # also record the entire Cato ref in case we find a use for it.
@@ -532,9 +536,9 @@ class CatoRunner
 
   def initialize(opt_hash)
     @opts = opt_hash
-    @factory = CatoBillFactory.new(@opts.limit_run)
     @exclude_intros = false
-    @exclude_intros = true if @opts.exclude_intros
+    @exclude_intros = true if @opts.exclude_intros_given
+    @factory = CatoBillFactory.new(@exclude_intros, @opts.limit_run)
   end
 
   def run
