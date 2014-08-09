@@ -20,6 +20,7 @@ BILL_RETRY_INTERVAL = 3
 
 DEFAULT_XML_DUMPDIR = '/tmp/catoxml'
 DEFAULT_TRIPLEFILE = '/tmp/catotriples.nt'
+SUMMARIZER_DIC = '/home/tom/RubymineProjects/CatoBills/en-legis.xml'
 
 BILL_LIST_URL = 'http://deepbills.cato.org/api/1/bills'
 BILL_API_PREFIX = 'http://deepbills.cato.org/api/1/bill?'
@@ -268,8 +269,9 @@ class CatoBill
 
     @short_title = doc.xpath('//short-title').first.content unless doc.xpath('short-title').first.nil?
     @legisnum = doc.xpath('//legis-num').first.content
-    content, @topics = doc.text.summarize( :topics => true )
+    content, @topics = @title.summarize( :topics => true )
     @topics = Iconv.iconv('ascii//translit', 'utf-8', @topics)[0]
+    @topics.gsub!(/,\s*,/,',')
     bflat = @legisnum.gsub(/\.\s+/, '_').downcase
     bnumber = @legisnum.split(/\s+/).last
     @uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}_#{bflat}")
