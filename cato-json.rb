@@ -10,6 +10,7 @@ include RDF
 require 'sparql'
 require 'linkeddata'
 
+
 class CatoBillsJsonFactory
   def initialize
     @sparql = SPARQL::Client.new(CATO_ENDPOINT)
@@ -114,11 +115,15 @@ class CatoBillsJsonFactory
     PREFIX usc:<http://liicornell.org/id/uscode/>
     PREFIX lii:<http://liicornell.org/top/>
     PREFIX dct:<http://purl.org/dc/terms/>
-    SELECT DISTINCT ?title ?page
+    PREFIX legis:<http://liicornell.org/legis/>
+    SELECT DISTINCT ?title ?page ?hnum ?snum ?topics
      WHERE {
        ?bill dct:title ?title .
        ?bill lii:hasPage ?page .
        ?bill lii:refUSCode #{myuri}
+        OPTIONAL { ?bill legis:hasHouseBillNumber ?hnum }
+        OPTIONAL { ?bill legis:hasSenateBillNumber ?snum}
+        OPTIONAL { ?bill lii:hasTopics ?topics }
       }
     EOQ
     q.rstrip! # looks like heredoc adds whitespace in ruby
@@ -132,6 +137,8 @@ class CatoBillsJsonFactory
       $stderr.puts e.backtrace.inspect
       return
     end
+
+
 
     # write
     $stderr.puts "Creating file #{mydir}/catobills.json \n"

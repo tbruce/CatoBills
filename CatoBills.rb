@@ -11,6 +11,7 @@ require 'ruby-prof'
 require 'open-uri'
 require 'cgi'
 require 'iconv'
+require 'summarize'
 include RDF
 
 HTTP_READ_TIMEOUT = 300
@@ -169,7 +170,7 @@ end
 class CatoBill
 
   attr_reader :stage, :title, :dctitle, :short_title, :legisnum, :type
-  attr_reader :genre, :congress, :version, :uri, :pathish_uri, :xml
+  attr_reader :genre, :congress, :version, :uri, :pathish_uri, :xml, :topics
 
   # unfortunately, constructor failure is very hard to handle in ruby, especially if creation of the object
   # depends on (eg) fetching something from the net. it makes sense to use separate methods to construct an
@@ -187,6 +188,7 @@ class CatoBill
     @dctitle = nil
     @short_title = nil
     @legisnum = nil
+    @topics = nil
     @xml = nil
     @refstrings = Array.new()
     @entrefs = Array.new()
@@ -262,8 +264,12 @@ class CatoBill
     @title = doc.xpath('//official-title').first.content.gsub(/[[:space:]]+/,' ')
     @dctitle = doc.xpath('//dc:title', 'dc' => DC_NS).first.content unless doc.xpath('//dc:title', 'dc' => DC_NS).first.nil?
     @dctitle = title.dup if @dctitle.nil?
+    @dctitle = Iconv.iconv('ascii//translit', 'utf-8', @dctitle)[0]
+
     @short_title = doc.xpath('//short-title').first.content unless doc.xpath('short-title').first.nil?
     @legisnum = doc.xpath('//legis-num').first.content
+    content, @topics = doc.text.summarize( :topics => true )
+    @topics = Iconv.iconv('ascii//translit', 'utf-8', @topics)[0]
     bflat = @legisnum.gsub(/\.\s+/, '_').downcase
     bnumber = @legisnum.split(/\s+/).last
     @uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}_#{bflat}")
@@ -324,13 +330,22 @@ class CatoBill
     # write triples into string buffer
     rdfout = RDF::Writer.for(:ntriples).buffer do |writer|
       # write all metadata triples
+      if @legisnum =~/^S/
+        utype = 'senate-bill'
+        numprop = legis.hasSenateBillNumber
+      end
+      if @legisnum =~/^H/
+        utype = 'house-bill'
+        numprop = legis.hasHouseBillNumber
+      end
       # put me in the graph
       writer << [@uri, RDF.type, legis.LegislativeMeasure]
       writer << [@uri, DC.title, @dctitle]
       writer << [@uri, legis.hasShortTitle, @short_title] unless @short_title.nil?
+      writer << [@uri, numprop, "#{@congress} #{@legisnum}"]
+      writer << [@uri, liivoc.hasTopics, @topics ] unless @topics.nil? || @topics.empty?
+
       # put my congress.gov page in the graph
-      utype = 'senate-bill' if @legisnum =~/^S/
-      utype = 'house-bill' if @legisnum =~/^H/
       cgurl = CONGRESS_GOV_PREFIX + "#{ordinalize(@congress)}-congress/#{utype}/#{@billnum}"
       writer << [@uri, liivoc.hasPage, RDF::URI(cgurl)]
       #now process all reference strings from the doc
