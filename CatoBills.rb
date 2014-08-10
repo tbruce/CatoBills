@@ -272,6 +272,7 @@ class CatoBill
     content, @topics = @title.summarize( :topics => true )
     @topics = Iconv.iconv('ascii//translit', 'utf-8', @topics)[0]
     @topics.gsub!(/,\s*,/,',')
+    @topics.gsub!(/,(\S)/,', \1')
     bflat = @legisnum.gsub(/\.\s+/, '_').downcase
     bnumber = @legisnum.split(/\s+/).last
     @uri = RDF::URI("#{BILL_URI_PREFIX}/#{@congress}_#{bflat}")
