@@ -25,6 +25,7 @@ SUMMARIZER_DIC = '/home/tom/RubymineProjects/CatoBills/en-legis.xml'
 BILL_LIST_URL = 'http://deepbills.cato.org/api/1/bills'
 BILL_API_PREFIX = 'http://deepbills.cato.org/api/1/bill?'
 CONGRESS_GOV_PREFIX = 'https://beta.congress.gov/bill/'
+EARLIEST_STATL_VOLUME = 65
 
 DC_NS = 'http://purl.org/NET/dc_owl2dl/terms_od/'
 CATO_NS = 'http://namespaces.cato.org/catoxml/'
@@ -471,7 +472,7 @@ class CatoBill
             writer << [@uri , liivoc.refStatL, refuri]
             writer << [refuri, DC.title, "#{reftitle} Stat.L #{refparts[0]}" ]
             # Volume 65 of StatL is currently the earliest available at GPO
-            if reftitle.to_i >= 65
+            if reftitle.to_i >= EARLIEST_STATL_VOLUME
               pagestr = "http://www.gpo.gov/fdsys/pkg/STATUTE-#{reftitle}/pdf/STATUTE-#{reftitle}pg#{refparts[0]}.pdf"
               writer << [refuri , liivoc.hasPage, RDF::URI(pagestr)]
               writer << [RDF::URI(pagestr), RDF.type, liivoc.LegalWebPage ]
@@ -528,7 +529,8 @@ class CatoBill
 
     # unfortunately, the QueryClass parameter for dbPedia lookups is not much help, since class information
     # is often missing.  Best alternative is to use a filter based on dbPedia categories.  Crudely implemented
-    # here as a string match against a series of keywords
+    # here as a string match against a series of keywords.
+    # dbPedia query service fails sometimes from overloading -- so we must be careful
     begin
       dbp_results = JSON.parse(c.body_str)
     rescue  JSON::ParserError => e
